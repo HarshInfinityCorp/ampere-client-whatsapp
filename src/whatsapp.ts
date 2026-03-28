@@ -10,7 +10,7 @@ import path from "path";
 import fs from "fs";
 import { config, isAllowlisted, registerLid } from "./config";
 import { parseAllBlocks, isTrade } from "./parser";
-import { saveTrade, isDuplicate, registerAdmin } from "./db";
+import { saveTrade, isDuplicate, registerAdmin, markTradesSynced } from "./db";
 
 // ── LID → Phone cache (built from group metadata) ──
 const lidToPhoneCache = new Map<string, string>();
@@ -209,15 +209,19 @@ async function onMessage(msg: proto.IWebMessageInfo) {
       }
 
       // Save to SQLite
-      saveTrade(trade);
+      const tradeId = saveTrade(trade);
       savedCount++;
 
       // Real-time sync to Google Sheets (with fallback)
       if (config.syncTradesToSheets) {
-        await appendTrade(trade).catch((e) => {
+        try {
+          await appendTrade(trade);
+          // Mark as synced so cron job doesn't duplicate it
+          markTradesSynced([tradeId]);
+        } catch (e: any) {
           console.error("[WA] ⚠️  Sheet sync failed, will retry later:", e.message);
-          // Trade is still in SQLite, will be synced by cron job
-        });
+          // Trade stays synced=0, cron job will retry in 5 min
+        }
       }
     }
 

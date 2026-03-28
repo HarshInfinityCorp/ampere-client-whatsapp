@@ -101,6 +101,10 @@ function isTicketLine(line: string): boolean {
   if (FOOTER_PATTERN.test(line)) return false;
   if (SELL_KEYWORDS.test(line) || BUY_KEYWORDS.test(line)) return false;
 
+  // Lines in parentheses are notes/restrictions, NOT ticket lines
+  // e.g., "(No Upper Quadrants)" is a note, not a ticket block
+  if (/^\(.*\)\.?$/.test(line.trim())) return false;
+
   // Has price
   if (hasPrice(line)) return true;
 
@@ -196,6 +200,10 @@ export function parseAllBlocks(text: string): ParsedTrade[] {
   for (const line of contentLines) {
     if (isTicketLine(line)) {
       ticketLines.push(line);
+    } else if (/^\(.*\)\.?$/.test(line.trim()) && ticketLines.length > 0) {
+      // Lines in parentheses → append as note to the previous ticket line
+      // e.g., "(No Upper Quadrants)" appended to "2x Longside Upper"
+      ticketLines[ticketLines.length - 1] += " " + line;
     } else if (!eventName) {
       eventName = line;
     } else {
