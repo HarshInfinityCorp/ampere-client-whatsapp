@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+.env
+*.json
+!package.json
+!tsconfig.json
+logs.txt
+PLAN.md
+PROJECT-CONTEXT.md
