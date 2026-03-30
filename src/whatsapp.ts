@@ -8,62 +8,15 @@ import { Boom } from "@hapi/boom";
 import pino from "pino";
 import path from "path";
 import fs from "fs";
-import { config, isAllowlisted, registerLid } from "./config";
-import { parseAllBlocks, isTrade } from "./parser";
-import { saveTrade, isDuplicate, registerAdmin, markTradesSynced } from "./db";
-
-// ── LID → Phone cache (built from group metadata) ──
-const lidToPhoneCache = new Map<string, string>();
-
-async function buildLidCache(socket: ReturnType<typeof makeWASocket>) {
-  // We build the cache lazily when we encounter a LID
-}
-
-async function resolveLidFromGroups(lidJid: string): Promise<string | null> {
-  if (!sock) return null;
-  const lid = lidJid.replace(/@.*/, "");
-  
-  // Check cache first
-  if (lidToPhoneCache.has(lid)) {
-    return lidToPhoneCache.get(lid)!;
-  }
-
-  // Try to find this LID in any group's participant list
-  try {
-    const groups = await sock.groupFetchAllParticipating();
-    for (const groupId in groups) {
-      const group = groups[groupId];
-      for (const participant of group.participants) {
-        // participant has: id (could be phone or lid), jid (normalized phone), lid
-        const pLid = (participant.lid || "").replace(/@.*/, "");
-        const pPhone = (participant.jid || participant.id || "").replace(/@.*/, "");
-        
-        if (pLid && pPhone && !pPhone.includes(pLid)) {
-          // Cache all LID→phone mappings we find
-          lidToPhoneCache.set(pLid, pPhone);
-        }
-      }
-    }
-
-    // Check cache again after building
-    if (lidToPhoneCache.has(lid)) {
-      console.log(`[WA] ✅ LID ${lid} resolved to phone: ${lidToPhoneCache.get(lid)} (from group metadata)`);
-      return lidToPhoneCache.get(lid)!;
-    }
-  } catch (e: any) {
-    console.error(`[WA] Error fetching group participants for LID resolution:`, e.message);
-  }
-
-  return null;
-}
-import { appendTrade, testConnection } from "./sheets";
+import { config, isAllowlisted } from "./config";
+import { parseAllTickets, isTicketMessage } from "./parser";
+import { saveTickets, isDuplicate, registerAdmin } from "./firebase";
 import { handleQuery } from "./query";
-import { processDeliveries, setDeliverySender } from "./delivery";
 
 const AUTH_DIR = path.join(process.cwd(), "data", ".wa-auth");
 const logger = pino({ level: "silent" });
 
-// Suppress Baileys decrypt errors from console (harmless, old messages from before pairing)
+// Suppress Baileys decrypt errors
 const originalConsoleError = console.error;
 console.error = (...args: any[]) => {
   const msg = args[0]?.toString() || "";
@@ -73,57 +26,56 @@ console.error = (...args: any[]) => {
 
 let sock: ReturnType<typeof makeWASocket> | null = null;
 
+// ── LID → Phone cache (built from group metadata) ──
+const lidToPhoneCache = new Map<string, string>();
+
 // ── Public send function ──
 export async function sendMessage(target: string, message: string): Promise<void> {
   if (!sock) throw new Error("WhatsApp not connected");
-
-  let jid: string;
-
-  if (target.includes("@")) {
-    // Already a JID (e.g. 75535673725102@lid or 919313557365@s.whatsapp.net)
-    jid = target;
-  } else {
-    // Plain phone number — format as JID
-    const digits = target.replace(/\D/g, "");
-    jid = `${digits}@s.whatsapp.net`;
-  }
-
+  const jid = target.includes("@") ? target : `${target.replace(/\D/g, "")}@s.whatsapp.net`;
   await sock.sendMessage(jid, { text: message });
   console.log(`[WA] Sent to ${jid}: ${message.slice(0, 60)}...`);
 }
 
-// ── Resolve LID to real phone number ──
+// ── Resolve LID via signal repository ──
 async function resolveLidToPhone(jid: string): Promise<string | null> {
-  if (!sock) return null;
-  if (!jid.endsWith("@lid")) return null;
-
+  if (!sock || !jid.endsWith("@lid")) return null;
   try {
     const signalRepo = (sock as any).signalRepository;
     const lidLookup = signalRepo?.lidMapping;
-    console.log(`[WA] signalRepository keys:`, signalRepo ? Object.keys(signalRepo) : "null");
-    console.log(`[WA] lidLookup:`, lidLookup ? Object.keys(lidLookup) : "null");
-
-    if (!lidLookup?.getPNForLID) {
-      console.log(`[WA] getPNForLID not available`);
-      return null;
-    }
+    if (!lidLookup?.getPNForLID) return null;
     const pnJid = await lidLookup.getPNForLID(jid);
-    console.log(`[WA] getPNForLID result:`, pnJid);
     if (!pnJid) return null;
     return pnJid.replace(/@.+/, "");
-  } catch (e: any) {
-    console.log(`[WA] LID resolve error:`, e.message);
-    return null;
-  }
+  } catch { return null; }
+}
+
+// ── Resolve LID via group participant metadata ──
+async function resolveLidFromGroups(lidJid: string): Promise<string | null> {
+  if (!sock) return null;
+  const lid = lidJid.replace(/@.*/, "");
+  if (lidToPhoneCache.has(lid)) return lidToPhoneCache.get(lid)!;
+
+  try {
+    const groups = await sock.groupFetchAllParticipating();
+    for (const groupId in groups) {
+      for (const participant of groups[groupId].participants) {
+        const pLid = (participant.lid || "").replace(/@.*/, "");
+        const pPhone = (participant.jid || participant.id || "").replace(/@.*/, "");
+        if (pLid && pPhone && pLid !== pPhone) {
+          lidToPhoneCache.set(pLid, pPhone);
+        }
+      }
+    }
+    return lidToPhoneCache.get(lid) || null;
+  } catch { return null; }
 }
 
 // ── Handle incoming messages ──
 async function onMessage(msg: proto.IWebMessageInfo) {
   const key = msg.key;
   const isGroup = key.remoteJid?.endsWith("@g.us");
-  const isFromMe = key.fromMe;
-
-  if (isFromMe) return; // ignore our own messages
+  if (key.fromMe) return;
 
   const text =
     msg.message?.conversation ||
@@ -136,142 +88,79 @@ async function onMessage(msg: proto.IWebMessageInfo) {
   const sender = msg.pushName || "Unknown";
   const remoteJid = key.remoteJid || "";
 
-  // Extract sender phone — resolve LID to real phone if needed
+  // ── Extract sender phone ──
   let rawJid = key.participant || remoteJid || "";
   let senderPhone = rawJid.replace(/@.+/, "");
 
-  // In group messages, participant might have real phone number
   if (isGroup && key.participant?.endsWith("@s.whatsapp.net")) {
     senderPhone = key.participant.replace(/@.+/, "");
+  } else if (rawJid.endsWith("@lid")) {
+    const resolved =
+      (await resolveLidToPhone(rawJid)) ||
+      (await resolveLidFromGroups(rawJid));
+    if (resolved) senderPhone = resolved;
   }
 
-  // If it's a LID, resolve to real phone number
-  if (rawJid.endsWith("@lid") || senderPhone.match(/^\d+$/) && !rawJid.endsWith("@s.whatsapp.net")) {
-    // Try signal repository first
-    const resolvedFromSignal = await resolveLidToPhone(rawJid.endsWith("@lid") ? rawJid : remoteJid);
-    if (resolvedFromSignal) {
-      console.log(`[WA] LID ${senderPhone} resolved via signal: ${resolvedFromSignal}`);
-      senderPhone = resolvedFromSignal;
-    } else {
-      // Try group metadata lookup
-      const resolvedFromGroups = await resolveLidFromGroups(rawJid.endsWith("@lid") ? rawJid : `${senderPhone}@lid`);
-      if (resolvedFromGroups) {
-        senderPhone = resolvedFromGroups;
-      } else {
-        console.log(`[WA] ⚠️ Could not resolve LID: ${senderPhone} — saving as-is`);
-      }
-    }
-  }
-
-  // ── GROUP MESSAGE: parse trades ──
+  // ── GROUP: parse ticket messages ──
   if (isGroup) {
-    if (!isTrade(text)) return;
+    if (!isTicketMessage(text)) return;
 
-    const groupId = key.remoteJid || "";
-    let groupName = groupId;
+    const groupJid = key.remoteJid || "";
+    const messageId = key.id || "";
+    let groupName = groupJid;
 
-    // Try to get group name from metadata (cached)
     try {
       if (sock) {
-        const meta = await sock.groupMetadata(groupId).catch(() => null);
+        const meta = await sock.groupMetadata(groupJid).catch(() => null);
         if (meta) groupName = meta.subject;
       }
     } catch { /* ignore */ }
 
-    // Parse all ticket blocks from message
-    const parsedBlocks = parseAllBlocks(text);
-
-    let savedCount = 0;
-    let dupCount = 0;
-
-    for (const parsed of parsedBlocks) {
-      const trade = {
-        type: parsed.type || undefined,
-        event_name: parsed.event_name || undefined,
-        block_details: parsed.block_details || undefined,
-        item: parsed.item || undefined,
-        quantity: parsed.quantity || undefined,
-        price: parsed.price || undefined,
-        sender_name: sender,
-        sender_phone: senderPhone,
-        group_name: groupName,
-        raw_message: text,
-        parsed: parsed.parsed,
-      };
-
-      // Check for duplicate
-      if (isDuplicate(trade)) {
-        dupCount++;
-        console.log(
-          `[WA] ⏭️  Duplicate skipped: ${parsed.event_name} - ${parsed.block_details}`
-        );
-        continue;
-      }
-
-      // Save to SQLite
-      const tradeId = saveTrade(trade);
-      savedCount++;
-
-      // Real-time sync to Google Sheets (with fallback)
-      if (config.syncTradesToSheets) {
-        try {
-          await appendTrade(trade);
-          // Mark as synced so cron job doesn't duplicate it
-          markTradesSynced([tradeId]);
-        } catch (e: any) {
-          console.error("[WA] ⚠️  Sheet sync failed, will retry later:", e.message);
-          // Trade stays synced=0, cron job will retry in 5 min
-        }
-      }
+    // Dedup by message ID
+    if (await isDuplicate(messageId, groupJid)) {
+      console.log(`[WA] ⏭️  Duplicate message skipped: ${messageId}`);
+      return;
     }
 
-    if (savedCount > 0) {
-      console.log(
-        `[WA] 📦 Saved ${savedCount} trade(s) from "${groupName}" by ${sender} (${dupCount} duplicates skipped)`
-      );
-    }
+    const tickets = parseAllTickets(text, {
+      sender_name: sender,
+      sender_phone: senderPhone,
+      group_name: groupName,
+      group_jid: groupJid,
+      message_id: messageId,
+    });
 
+    if (!tickets.length) return;
+
+    await saveTickets(tickets as any);
+    console.log(`[WA] 🎫 Saved ${tickets.length} ticket(s) from "${groupName}" by ${sender}`);
     return;
   }
 
-  // ── DM MESSAGE ──
+  // ── DM: admin commands ──
   if (!isGroup) {
-    console.log(`[WA] DM received from: ${senderPhone} (raw JID: ${key.remoteJid})`);
-
+    console.log(`[WA] DM from: ${senderPhone} (raw JID: ${remoteJid})`);
     const lower = text.toLowerCase().trim();
 
-    // ── Auto-registration — works for ANYONE before allowlist check ──
-    // New admin sends "register <secret>" → auto-saved to DB, no restart needed
+    // Registration (works for anyone)
     if (lower === `register ${config.registerSecret}`) {
-      console.log(`[WA] 🔑 Registration request from: ${senderPhone} (${sender})`);
-      const success = registerAdmin(senderPhone, sender);
-      if (success) {
-        console.log(`[WA] ✅ Admin registered: ${senderPhone} (${sender})`);
-        await sendMessage(remoteJid,
-          `✅ *You're registered!*\n\nYou can now query me directly.\n\nTry:\n• "show available"\n• "find Liverpool"\n• "how many today?"\n• "send pending deliveries"`
-        );
-      } else {
-        await sendMessage(remoteJid, `✅ You're already registered! Send me a query.`);
-      }
+      console.log(`[WA] 🔑 Registration from: ${senderPhone} (${sender})`);
+      const success = await registerAdmin(senderPhone, sender);
+      await sendMessage(remoteJid,
+        success
+          ? `✅ You're registered!\n\nYou can now query me.\n\nTry:\n• "show available"\n• "find Liverpool"\n• "how many today?"`
+          : `✅ You're already registered! Just ask me a question.`
+      );
       return;
     }
 
-    if (!isAllowlisted(senderPhone)) {
-      console.log(`[WA] ❌ Not in allowlist: ${senderPhone}`);
-      console.log(`[WA] 👉 They can send "register admin123" to discover their ID`);
+    // Allowlist check
+    if (!(await isAllowlisted(senderPhone))) {
+      console.log(`[WA] ❌ Not registered: ${senderPhone}`);
       return;
     }
 
-    console.log(`[WA] 💬 Query from ${sender} (${senderPhone}): ${text}`);
-
-    if (lower === "send pending deliveries" || lower === "send deliveries" || lower === "deliver") {
-      await sendMessage(remoteJid, "⏳ Processing deliveries from Google Sheet...");
-      const result = await processDeliveries();
-      await sendMessage(remoteJid, result);
-      return;
-    }
-
-    // AI query
+    console.log(`[WA] 💬 Query from ${sender}: ${text}`);
     await sendMessage(remoteJid, "⏳ Looking that up...");
     const answer = await handleQuery(text);
     await sendMessage(remoteJid, answer);
@@ -280,9 +169,7 @@ async function onMessage(msg: proto.IWebMessageInfo) {
 
 // ── Start WhatsApp ──
 export async function startWhatsApp(): Promise<void> {
-  if (!fs.existsSync(AUTH_DIR)) {
-    fs.mkdirSync(AUTH_DIR, { recursive: true });
-  }
+  if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
@@ -297,16 +184,12 @@ export async function startWhatsApp(): Promise<void> {
     browser: ["Mac OS", "Chrome", "130.0.0"],
   });
 
-  // Register delivery sender
-  setDeliverySender(sendMessage);
-
   // ── Pairing ──
   if (!state.creds.registered) {
     if (!config.waPairingPhone) {
       console.error("[WA] ❌ WA_PAIRING_PHONE not set in .env");
       process.exit(1);
     }
-
     console.log(`[WA] Requesting pairing code for ${config.waPairingPhone}...`);
     await sleep(3000);
     const code = await sock.requestPairingCode(config.waPairingPhone.replace(/\D/g, ""));
@@ -314,7 +197,6 @@ export async function startWhatsApp(): Promise<void> {
     console.log("[WA] Enter this code in WhatsApp → Linked Devices → Link a Device → Link with phone number\n");
   }
 
-  // ── Events ──
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", async (update) => {
@@ -323,15 +205,11 @@ export async function startWhatsApp(): Promise<void> {
     if (connection === "close") {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
       console.log(`[WA] Connection closed (status: ${statusCode}). Reconnect: ${shouldReconnect}`);
-
       if (shouldReconnect) {
         console.log("[WA] Reconnecting in 5s...");
         await sleep(5000);
         startWhatsApp();
-      } else {
-        console.log("[WA] Logged out. Delete data/.wa-auth and restart to re-pair.");
       }
     }
 
@@ -341,12 +219,10 @@ export async function startWhatsApp(): Promise<void> {
 
       // Build LID→phone cache from all groups
       try {
-        console.log("[WA] Building LID→phone cache from group participants...");
         const groups = await sock!.groupFetchAllParticipating();
         let cached = 0;
         for (const groupId in groups) {
-          const group = groups[groupId];
-          for (const participant of group.participants) {
+          for (const participant of groups[groupId].participants) {
             const pLid = (participant.lid || "").replace(/@.*/, "");
             const pPhone = (participant.jid || participant.id || "").replace(/@.*/, "");
             if (pLid && pPhone && pLid !== pPhone) {
@@ -359,9 +235,6 @@ export async function startWhatsApp(): Promise<void> {
       } catch (e: any) {
         console.error("[WA] ⚠️ Could not build LID cache:", e.message);
       }
-
-      // Test Google Sheets connection
-      await testConnection();
     }
   });
 

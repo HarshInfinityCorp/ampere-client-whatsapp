@@ -1,42 +1,11 @@
 /**
- * Ticket Message Parser
+ * Ticket Message Parser — v2
  *
- * Parses ticket listings from WhatsApp groups.
- *
- * ── SUPPORTED FORMATS ──
- *
- * 1. Available/Wanted at START:
- *    Available
- *    Liverpool end @ Everton
- *    2-2-2 £425pp
- *    Dm
- *
- * 2. Available/Wanted at END:
- *    Liverpool Legends v BvB Dortmund Legends
- *    4 x AU2 row 21 £60 each
- *    Available
- *
- * 3. Slash-separated prices (€):
- *    block 201 / 40 €
- *    block 208 / 70 €
- *
- * 4. "each" pricing:
- *    2+2 block 95 £1250 each
- *
- * 5. "pp" pricing:
- *    4 x kop £500pp
+ * Parses ticket listings into client's schema with quantity expansion.
+ * Each pair/quad in a line becomes a separate ticket record.
  */
 
-export interface ParsedTrade {
-  type: "buy" | "sell" | null;
-  event_name: string | null;
-  block_details: string | null;
-  item: string | null;
-  quantity: string | null;
-  price: string | null;
-  raw_message: string;
-  parsed: boolean;
-}
+import type { Ticket } from "./firebase";
 
 // ── Keywords ──
 const SELL_KEYWORDS = /^(available|selling|for sale|wts)$/i;
@@ -47,233 +16,320 @@ const BUY_INLINE = /\b(wanted|looking for|wtb|need)\b/i;
 // ── Footer lines to skip ──
 const FOOTER_PATTERN = /^(dm|ready to send|ready to send,?\s*dm|message me|contact me|ping me|hit me up)[\s,.!]*$/i;
 
-// ── Price patterns (handles multiple formats) ──
-// £500pp, £1250 each, €40, $800, 40 €, 70€
-const PRICE_PATTERNS = [
-  // Currency before number: £500pp, €40, $1250 each
-  /(£|€|\$|rs\.?|₹)\s*(\d+(?:,\d+)*(?:\.\d+)?)\s*(pp|each|per\s*person)?/i,
-  // Number before currency: 40 €, 70€
-  /(\d+(?:,\d+)*(?:\.\d+)?)\s*(£|€|\$|₹)\s*(pp|each|per\s*person)?/i,
-  // Slash format: / 40 €, /70€
-  /\/\s*(\d+(?:,\d+)*(?:\.\d+)?)\s*(£|€|\$|₹)?\s*(pp|each|per\s*person)?/i,
-];
+// ── Currency symbols ──
+const CURRENCY_MAP: Record<string, "GBP" | "EUR" | "USD" | "INR"> = {
+  "£": "GBP",
+  "€": "EUR",
+  "$": "USD",
+  "₹": "INR",
+  "rs": "INR",
+};
 
-function extractPrice(line: string): string | null {
-  for (const pattern of PRICE_PATTERNS) {
-    const match = line.match(pattern);
-    if (match) {
-      // Determine currency and amount based on capture group order
-      if (pattern === PRICE_PATTERNS[0]) {
-        // Currency before number
-        return `${match[1]}${match[2]}${match[3] ? " " + match[3] : ""}`.trim();
-      } else if (pattern === PRICE_PATTERNS[1]) {
-        // Number before currency
-        return `${match[2]}${match[1]}${match[3] ? " " + match[3] : ""}`.trim();
-      } else if (pattern === PRICE_PATTERNS[2]) {
-        // Slash format
-        const currency = match[2] || "€";
-        return `${currency}${match[1]}${match[3] ? " " + match[3] : ""}`.trim();
-      }
-    }
+// ── Extract price from a line ──
+interface PriceResult {
+  price: number;
+  currency: "GBP" | "EUR" | "USD" | "INR";
+  price_type: "per_ticket";
+}
+
+function extractPrice(line: string): PriceResult | null {
+  // Format 1: £500pp, £1250 each, €40, $800
+  const currencyFirst = line.match(/(£|€|\$|₹)\s*(\d+(?:,\d+)*(?:\.\d+)?)\s*(pp|each|per\s*ticket)?/i);
+  if (currencyFirst) {
+    const currency = CURRENCY_MAP[currencyFirst[1]] || "GBP";
+    const price = parseFloat(currencyFirst[2].replace(/,/g, ""));
+    return { price, currency, price_type: "per_ticket" };
   }
+
+  // Format 2: / 40 €, / 70€, 40€
+  const currencyLast = line.match(/\/?\s*(\d+(?:,\d+)*(?:\.\d+)?)\s*(£|€|\$|₹)\s*(pp|each|per\s*ticket)?/i);
+  if (currencyLast) {
+    const currency = CURRENCY_MAP[currencyLast[2]] || "EUR";
+    const price = parseFloat(currencyLast[1].replace(/,/g, ""));
+    return { price, currency, price_type: "per_ticket" };
+  }
+
   return null;
 }
 
 function hasPrice(line: string): boolean {
-  return PRICE_PATTERNS.some((p) => p.test(line));
+  return extractPrice(line) !== null;
 }
 
-// ── Block detail extraction ──
-// Removes price from the line to get just the block info
-function extractBlockDetails(line: string): string {
-  let block = line;
-  // Remove price portions
-  for (const pattern of PRICE_PATTERNS) {
-    block = block.replace(pattern, "");
+// ── Extract row from a line ──
+function extractRow(line: string): string | null {
+  const rowMatch = line.match(/\brow\s+(\d+)/i);
+  return rowMatch ? rowMatch[1] : null;
+}
+
+// ── Extract seat note from parentheses ──
+function extractSeatNote(line: string): string | null {
+  const noteMatch = line.match(/\(([^)]+)\)/);
+  return noteMatch ? noteMatch[1].trim() : null;
+}
+
+// ── Parse quantity prefix and expand into records ──
+interface QuantityGroup {
+  quantity_value: number | null;
+  ticket_type: "pair" | "quad" | null;
+  repetitions: number; // how many records to create
+  area_text: string;   // line with quantity prefix removed
+}
+
+function parseQuantityAndExpand(line: string): QuantityGroup {
+  // Remove price and notes from line first for cleaner area extraction
+  let cleanLine = line
+    .replace(/(£|€|\$|₹)\s*\d+(?:,\d+)*(?:\.\d+)?\s*(pp|each|per\s*ticket)?/gi, "")
+    .replace(/\/?\s*\d+(?:,\d+)*(?:\.\d+)?\s*(£|€|\$|₹)\s*(pp|each|per\s*ticket)?/gi, "")
+    .replace(/\([^)]*\)/g, "") // remove parentheses
+    .replace(/\brow\s+\d+/gi, "") // remove "row 21"
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // ── Pattern 1: Dash-separated "2-2-2" or "4-4" ──
+  // Each number = one group of that many tickets
+  const dashPattern = cleanLine.match(/^(\d+(?:-\d+)+)\s*(.*)/);
+  if (dashPattern) {
+    const groups = dashPattern[1].split("-").map(Number);
+    const area = dashPattern[2].trim();
+    const groupSize = groups[0]; // all groups should be same size
+    const ticketType = groupSize === 2 ? "pair" : groupSize === 4 ? "quad" : null;
+    return {
+      quantity_value: groupSize,
+      ticket_type: ticketType,
+      repetitions: groups.length,
+      area_text: area,
+    };
   }
-  // Clean up slashes, extra spaces, trailing commas
-  block = block.replace(/[\/,]+\s*$/, "").replace(/\s+/g, " ").trim();
-  return block || line;
+
+  // ── Pattern 2: Plus-separated "2+2" ──
+  const plusPattern = cleanLine.match(/^(\d+)\s*\+\s*(\d+)\s*(.*)/);
+  if (plusPattern) {
+    const groupSize = parseInt(plusPattern[1]);
+    const groups = 2; // 2+2 = two groups
+    const area = plusPattern[3].trim();
+    const ticketType = groupSize === 2 ? "pair" : groupSize === 4 ? "quad" : null;
+    return {
+      quantity_value: groupSize,
+      ticket_type: ticketType,
+      repetitions: groups,
+      area_text: area,
+    };
+  }
+
+  // ── Pattern 3: "N pair ..." ──
+  const pairPattern = cleanLine.match(/^(\d+)\s*pair\s*(.*)/i);
+  if (pairPattern) {
+    const repetitions = parseInt(pairPattern[1]);
+    const area = pairPattern[2].trim();
+    return {
+      quantity_value: 2,
+      ticket_type: "pair",
+      repetitions,
+      area_text: area,
+    };
+  }
+
+  // ── Pattern 4: "N x item" ──
+  const nxPattern = cleanLine.match(/^(\d+)\s*x\s*(.*)/i);
+  if (nxPattern) {
+    const qty = parseInt(nxPattern[1]);
+    const area = nxPattern[2].trim();
+    const ticketType = qty === 2 ? "pair" : qty === 4 ? "quad" : null;
+    return {
+      quantity_value: qty,
+      ticket_type: ticketType,
+      repetitions: 1,
+      area_text: area,
+    };
+  }
+
+  // ── Pattern 5: "Nx item" (no space) e.g. "2x Longside" ──
+  const nxNoSpacePattern = cleanLine.match(/^(\d+)x\s*(.*)/i);
+  if (nxNoSpacePattern) {
+    const qty = parseInt(nxNoSpacePattern[1]);
+    const area = nxNoSpacePattern[2].trim();
+    const ticketType = qty === 2 ? "pair" : qty === 4 ? "quad" : null;
+    return {
+      quantity_value: qty,
+      ticket_type: ticketType,
+      repetitions: 1,
+      area_text: area,
+    };
+  }
+
+  // ── Pattern 6: Bare number "4 dug out" ──
+  const bareNumberPattern = cleanLine.match(/^(\d+)\s+(.*)/);
+  if (bareNumberPattern) {
+    const qty = parseInt(bareNumberPattern[1]);
+    const area = bareNumberPattern[2].trim();
+    // Only treat as quantity if area_text is meaningful (not just digits)
+    if (area && !/^\d+$/.test(area)) {
+      const ticketType = qty === 2 ? "pair" : qty === 4 ? "quad" : null;
+      return {
+        quantity_value: qty,
+        ticket_type: ticketType,
+        repetitions: 1,
+        area_text: area,
+      };
+    }
+  }
+
+  // ── Pattern 7: No quantity — e.g. "block 201" ──
+  return {
+    quantity_value: null,
+    ticket_type: null,
+    repetitions: 1,
+    area_text: cleanLine,
+  };
 }
 
-// ── Check if a line looks like a ticket detail line ──
+// ── Check if a line is a ticket detail line ──
 function isTicketLine(line: string): boolean {
   if (FOOTER_PATTERN.test(line)) return false;
   if (SELL_KEYWORDS.test(line) || BUY_KEYWORDS.test(line)) return false;
 
-  // Lines in parentheses are notes/restrictions, NOT ticket lines
-  // e.g., "(No Upper Quadrants)" is a note, not a ticket block
+  // Lines fully in parentheses are notes
   if (/^\(.*\)\.?$/.test(line.trim())) return false;
 
-  // Has price
   if (hasPrice(line)) return true;
-
-  // Has block/section patterns: "2-2-2", "4 x kop", "block 95", "2+2"
-  if (/\d+\s*[-+]\s*\d+/.test(line)) return true; // 2-2-2, 2+2
-  if (/\d+\s*x\s/i.test(line)) return true; // 4 x kop
-  if (/\bblock\s+\d+/i.test(line)) return true; // block 95
-  if (/\brow\s+\d+/i.test(line)) return true; // row 21
-  if (/\b(kop|upper|lower|dug\s*out|longside|quadrant)\b/i.test(line)) return true; // section names
-  if (/\bpair\b/i.test(line)) return true; // 5 pair long upper
+  if (/\d+\s*[-+]\s*\d+/.test(line)) return true;    // 2-2-2, 2+2
+  if (/\d+\s*x\s/i.test(line)) return true;           // 4 x kop
+  if (/\d+x\s/i.test(line)) return true;              // 2x Longside
+  if (/\bblock\s+\d+/i.test(line)) return true;       // block 95
+  if (/\brow\s+\d+/i.test(line)) return true;         // row 21
+  if (/\b(kop|upper|lower|dug\s*out|longside|quadrant)\b/i.test(line)) return true;
+  if (/\bpair\b/i.test(line)) return true;
 
   return false;
 }
 
-// ── Extract quantity ──
-function extractQuantity(line: string): string | null {
-  // "4 x kop" → 4
-  const xMatch = line.match(/(\d+)\s*x\s/i);
-  if (xMatch) return xMatch[1];
-
-  // "2+2 block" → 4
-  const plusMatch = line.match(/^(\d+)\s*\+\s*(\d+)/);
-  if (plusMatch) return String(parseInt(plusMatch[1]) + parseInt(plusMatch[2]));
-
-  // "5 pair" → 5 (but return as "5 pair")
-  const pairMatch = line.match(/(\d+)\s*pair/i);
-  if (pairMatch) return pairMatch[1];
-
-  return null;
-}
-
-/**
- * Parse all ticket blocks from a message
- * Returns array of trades (one per block)
- */
-export function parseAllBlocks(text: string): ParsedTrade[] {
+// ── Main export: parse all tickets from a message ──
+export function parseAllTickets(
+  text: string,
+  meta: {
+    sender_name: string;
+    sender_phone: string;
+    group_name: string;
+    group_jid: string;
+    message_id: string;
+  }
+): Omit<Ticket, "id" | "created_at">[] {
   const raw = text.trim();
   const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
-
   if (lines.length === 0) return [];
 
-  // ── Detect type and position (start or end of message) ──
-  let type: "buy" | "sell" | null = null;
+  // ── Detect availability status ──
+  let status: "available" | "wanted" = "available";
   let typeLineIndex = -1;
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (SELL_KEYWORDS.test(line)) {
-      type = "sell";
-      typeLineIndex = i;
-      break;
-    }
-    if (BUY_KEYWORDS.test(line)) {
-      type = "buy";
-      typeLineIndex = i;
-      break;
-    }
+    if (SELL_KEYWORDS.test(lines[i])) { status = "available"; typeLineIndex = i; break; }
+    if (BUY_KEYWORDS.test(lines[i])) { status = "wanted"; typeLineIndex = i; break; }
   }
 
-  // If no standalone keyword found, check inline (e.g., "ready to send, DM" with "available" elsewhere)
-  if (!type) {
+  // Inline fallback
+  if (typeLineIndex === -1) {
     for (let i = 0; i < lines.length; i++) {
       if (SELL_INLINE.test(lines[i]) && !FOOTER_PATTERN.test(lines[i])) {
-        type = "sell";
-        typeLineIndex = i;
-        break;
+        status = "available"; typeLineIndex = i; break;
       }
       if (BUY_INLINE.test(lines[i]) && !FOOTER_PATTERN.test(lines[i])) {
-        type = "buy";
-        typeLineIndex = i;
-        break;
+        status = "wanted"; typeLineIndex = i; break;
       }
     }
   }
 
-  if (!type) return [];
+  if (typeLineIndex === -1) return []; // not a ticket message
+
+  // ── Get content lines (skip keyword + footer lines) ──
+  const contentLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (i === typeLineIndex) continue;
+    if (FOOTER_PATTERN.test(lines[i])) continue;
+    if (SELL_KEYWORDS.test(lines[i]) || BUY_KEYWORDS.test(lines[i])) continue;
+    contentLines.push(lines[i]);
+  }
 
   // ── Separate event name from ticket lines ──
   let eventName = "";
   let ticketLines: string[] = [];
 
-  // Determine which lines are content (skip type keyword line and footers)
-  const contentLines: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (i === typeLineIndex) continue; // skip the keyword line
-    if (FOOTER_PATTERN.test(line)) continue; // skip DM, ready to send, etc.
-    if (SELL_KEYWORDS.test(line) || BUY_KEYWORDS.test(line)) continue; // skip other keyword lines
-    contentLines.push(line);
-  }
-
-  // First pass: identify event name vs ticket detail lines
   for (const line of contentLines) {
     if (isTicketLine(line)) {
       ticketLines.push(line);
     } else if (/^\(.*\)\.?$/.test(line.trim()) && ticketLines.length > 0) {
-      // Lines in parentheses → append as note to the previous ticket line
-      // e.g., "(No Upper Quadrants)" appended to "2x Longside Upper"
+      // Parenthesised note → append to previous ticket line
       ticketLines[ticketLines.length - 1] += " " + line;
     } else if (!eventName) {
       eventName = line;
-    } else {
-      // Could be continuation of event name or extra text
-      // If we already have ticket lines, ignore it
-      if (ticketLines.length === 0) {
-        eventName += " " + line;
-      }
+    } else if (ticketLines.length === 0) {
+      eventName += " " + line;
     }
   }
 
-  // If no event name found but we have ticket lines, use context
-  if (!eventName && ticketLines.length > 0) {
-    // The whole message might be just ticket details without explicit event
-    eventName = "Unknown Event";
+  if (!eventName && ticketLines.length > 0) eventName = "Unknown Event";
+
+  // ── Parse each ticket line into expanded records ──
+  const results: Omit<Ticket, "id" | "created_at">[] = [];
+
+  for (const line of ticketLines) {
+    const priceResult = extractPrice(line);
+    const row = extractRow(line);
+    const seatNote = extractSeatNote(line);
+    const { quantity_value, ticket_type, repetitions, area_text } = parseQuantityAndExpand(line);
+
+    // Create `repetitions` records for this line
+    for (let i = 0; i < repetitions; i++) {
+      results.push({
+        event: eventName || null,
+        ticket_type,
+        quantity_value,
+        price: priceResult?.price ?? null,
+        price_type: priceResult ? "per_ticket" : null,
+        currency: priceResult?.currency ?? null,
+        area_text: area_text || null,
+        row: row || null,
+        seat_note: seatNote || null,
+        availability_status: status,
+        raw_line_text: line,
+        sender_name: meta.sender_name,
+        sender_phone: meta.sender_phone,
+        group_name: meta.group_name,
+        group_jid: meta.group_jid,
+        message_id: meta.message_id,
+      });
+    }
   }
 
-  // ── Parse each ticket line into a trade ──
-  if (ticketLines.length === 0) {
-    // No ticket lines — just an event listing
-    return [{
-      type,
-      event_name: eventName || null,
-      block_details: null,
-      item: eventName || null,
-      quantity: null,
+  // If no ticket lines but has event, save one record for the whole listing
+  if (results.length === 0 && eventName) {
+    results.push({
+      event: eventName,
+      ticket_type: null,
+      quantity_value: null,
       price: null,
-      raw_message: raw,
-      parsed: true,
-    }];
+      price_type: null,
+      currency: null,
+      area_text: null,
+      row: null,
+      seat_note: null,
+      availability_status: status,
+      raw_line_text: raw,
+      sender_name: meta.sender_name,
+      sender_phone: meta.sender_phone,
+      group_name: meta.group_name,
+      group_jid: meta.group_jid,
+      message_id: meta.message_id,
+    });
   }
 
-  return ticketLines.map((line) => {
-    const price = extractPrice(line);
-    const blockDetails = extractBlockDetails(line);
-    const quantity = extractQuantity(line);
-
-    const item = eventName && blockDetails
-      ? `${eventName} - ${blockDetails}${price ? " - " + price : ""}`
-      : eventName || blockDetails || null;
-
-    return {
-      type,
-      event_name: eventName || null,
-      block_details: blockDetails || null,
-      item,
-      quantity,
-      price,
-      raw_message: raw,
-      parsed: true,
-    };
-  });
+  return results;
 }
 
-export function parseMessage(text: string): ParsedTrade {
-  const blocks = parseAllBlocks(text);
-  if (blocks.length > 0) return blocks[0];
-
-  return {
-    type: null,
-    event_name: null,
-    block_details: null,
-    item: null,
-    quantity: null,
-    price: null,
-    raw_message: text.trim(),
-    parsed: false,
-  };
-}
-
-export function isTrade(text: string): boolean {
-  return parseAllBlocks(text).length > 0;
+export function isTicketMessage(text: string): boolean {
+  const lines = text.trim().split("\n").map((l) => l.trim());
+  return lines.some(
+    (l) => SELL_KEYWORDS.test(l) || BUY_KEYWORDS.test(l) || SELL_INLINE.test(l) || BUY_INLINE.test(l)
+  );
 }
