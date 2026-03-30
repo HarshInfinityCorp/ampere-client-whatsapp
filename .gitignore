@@ -8,3 +8,5 @@ data/
 logs.txt
 PLAN.md
 PROJECT-CONTEXT.md
+IMPLEMENTATION-PLAN.md
+firebase-service-account.json

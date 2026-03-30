@@ -9,19 +9,18 @@ This guide walks you through setting up the bot from scratch on a fresh machine.
 1. [Prerequisites](#1-prerequisites)
 2. [Install Node.js](#2-install-nodejs)
 3. [Download the Project](#3-download-the-project)
-4. [Create Google Cloud Project](#4-create-google-cloud-project)
-5. [Enable Google Sheets API](#5-enable-google-sheets-api)
-6. [Create Service Account](#6-create-service-account)
-7. [Create Google Sheet](#7-create-google-sheet)
-8. [Set Up AI (Choose One)](#8-set-up-ai-choose-one)
-9. [Configure the Bot](#9-configure-the-bot)
-10. [Start the Bot](#10-start-the-bot)
-11. [Pair WhatsApp](#11-pair-whatsapp)
-12. [Register as Admin](#12-register-as-admin)
-13. [Add Bot to Groups](#13-add-bot-to-groups)
-14. [Test Everything](#14-test-everything)
-15. [Daily Usage](#15-daily-usage)
-16. [Troubleshooting](#16-troubleshooting)
+4. [Create Firebase Project](#4-create-firebase-project)
+5. [Set Up Firestore Database](#5-set-up-firestore-database)
+6. [Download Firebase Service Account Key](#6-download-firebase-service-account-key)
+7. [Set Up AI](#7-set-up-ai-choose-one)
+8. [Configure the Bot](#8-configure-the-bot)
+9. [Start the Bot](#9-start-the-bot)
+10. [Pair WhatsApp](#10-pair-whatsapp)
+11. [Register as Admin](#11-register-as-admin)
+12. [Add Bot to Groups](#12-add-bot-to-groups)
+13. [Test Everything](#13-test-everything)
+14. [Daily Usage](#14-daily-usage)
+15. [Troubleshooting](#15-troubleshooting)
 
 ---
 
@@ -30,14 +29,11 @@ This guide walks you through setting up the bot from scratch on a fresh machine.
 You need:
 - A **computer** (Mac, Windows, or Linux) that stays ON while the bot runs
 - A **WhatsApp number** for the bot (use an OLD number, NOT a new SIM)
-- A **Google account** (for Google Sheets backup)
-- An **AI API key** (Gemini is free, or use OpenClaw)
+- A **Google account** (for Firebase)
+- An **AI API key** (Gemini is free)
 - **Internet connection**
 
-⚠️ **Important:** The bot's WhatsApp number should be:
-- An **existing number** with history (not freshly activated)
-- A number you can keep as a **linked device** (it stays on your phone too)
-- NOT your primary personal number (use a secondary/spare number)
+⚠️ **Important:** The bot's WhatsApp number should be an existing number with history, not freshly activated.
 
 ---
 
@@ -45,15 +41,12 @@ You need:
 
 ### Mac
 ```bash
-# Using Homebrew
 brew install node
-
 # Or download from: https://nodejs.org (LTS version)
 ```
 
 ### Windows
-Download from: https://nodejs.org (LTS version)
-Run the installer, click Next through all steps.
+Download from: https://nodejs.org (LTS version) and run the installer.
 
 ### Linux
 ```bash
@@ -61,10 +54,10 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
 ```
 
-### Verify Installation
+### Verify
 ```bash
-node --version    # Should show v18+ 
-npm --version     # Should show 9+
+node --version    # Should show v18+
+npm --version
 ```
 
 ---
@@ -72,227 +65,102 @@ npm --version     # Should show 9+
 ## 3. Download the Project
 
 ```bash
-# Clone the repository
-git clone https://github.com/harshil-l/ampere-client-whatsapp.git
-
-# Enter the project folder
+git clone https://github.com/harshilLakhani22/ampere-client-whatsapp.git
 cd ampere-client-whatsapp
-
-# Install dependencies
 npm install
 ```
 
-You should see packages installing. Wait for it to finish (1-2 minutes).
+---
+
+## 4. Create Firebase Project
+
+1. Go to: **https://console.firebase.google.com**
+2. Click **"Create a project"**
+3. Enter a project name (e.g., `ticket-bot`)
+4. **Disable Google Analytics** → Click **"Create project"**
+5. Wait ~30 seconds → Click **"Continue"**
 
 ---
 
-## 4. Create Google Cloud Project
+## 5. Set Up Firestore Database
 
-1. Go to **Google Cloud Console**: https://console.cloud.google.com
-
-2. **Sign in** with your Google account
-
-3. Click the project dropdown at the top → **"New Project"**
-   ```
-   Project name: whatsapp-ticket-bot
-   Organization: (leave default)
-   Location: (leave default)
-   ```
-
-4. Click **"Create"**
-
-5. Wait 10-15 seconds, then **select the project** from the dropdown
+1. In the left sidebar → Click **"Firestore Database"**
+2. Click **"Create database"**
+3. Select **"Start in production mode"** → Click **"Next"**
+4. Choose location: **`eur3 (Europe)`** or `nam5 (US)` → Click **"Enable"**
+5. Wait for it to provision (~20 seconds)
 
 ---
 
-## 5. Enable Google Sheets API
+## 6. Download Firebase Service Account Key
 
-1. In Google Cloud Console, go to the hamburger menu (☰) → **"APIs & Services"** → **"Library"**
+1. Click the **gear icon ⚙️** (top left) → **"Project settings"**
+2. Go to **"Service accounts"** tab
+3. Click **"Generate new private key"** → **"Generate key"**
+4. A JSON file downloads automatically
 
-2. Search for **"Google Sheets API"**
+5. Move it to the project folder:
+```bash
+# Mac/Linux
+mv ~/Downloads/ticket-bot-*.json ./firebase-service-account.json
 
-3. Click on it → Click **"Enable"**
+# Windows
+Move-Item ~\Downloads\ticket-bot-*.json .\firebase-service-account.json
+```
 
-4. Wait for it to enable (10-20 seconds)
-
-✅ Google Sheets API is now enabled.
-
----
-
-## 6. Create Service Account
-
-A service account is like a "robot Google account" that lets your bot read/write Google Sheets.
-
-### Step 6a: Create the Account
-
-1. Go to hamburger menu (☰) → **"APIs & Services"** → **"Credentials"**
-
-2. Click **"+ Create Credentials"** at the top → **"Service Account"**
-
-3. Fill in:
-   ```
-   Service account name: whatsapp-bot
-   Service account ID: (auto-filled)
-   Description: WhatsApp ticket bot service account
-   ```
-
-4. Click **"Create and Continue"**
-
-5. **Skip** the "Grant access" step → Click **"Continue"**
-
-6. **Skip** the "Grant users access" step → Click **"Done"**
-
-### Step 6b: Create JSON Key
-
-1. You'll see your service account in the list. **Click on it**.
-
-2. Go to the **"Keys"** tab
-
-3. Click **"Add Key"** → **"Create new key"**
-
-4. Select **"JSON"** → Click **"Create"**
-
-5. A `.json` file will download automatically (e.g., `whatsapp-ticket-bot-abc123.json`)
-
-6. **Move this file** to your project folder:
-   ```bash
-   # Mac/Linux
-   mv ~/Downloads/whatsapp-ticket-bot-*.json ./service-account.json
-
-   # Windows (PowerShell)
-   Move-Item ~\Downloads\whatsapp-ticket-bot-*.json .\service-account.json
-   ```
-
-7. **Note the email** in the JSON file (you'll need it in the next step). It looks like:
-   ```
-   whatsapp-bot@whatsapp-ticket-bot.iam.gserviceaccount.com
-   ```
-   You can find it by opening the file:
-   ```bash
-   # Mac/Linux
-   cat service-account.json | grep client_email
-
-   # Or just open the file in any text editor
-   ```
-
-✅ Service account created with JSON key.
+6. Note your **Project ID** from the Project Settings page (e.g., `ticket-bot-ab6bb`)
 
 ---
 
-## 7. Create Google Sheet
-
-1. Go to **Google Sheets**: https://sheets.google.com
-
-2. Click **"+ Blank"** to create a new spreadsheet
-
-3. **Name it** something like "Ticket Bot Data"
-
-4. **Copy the Sheet ID** from the URL:
-   ```
-   https://docs.google.com/spreadsheets/d/THIS_IS_YOUR_SHEET_ID/edit
-   ```
-   The Sheet ID is the long string between `/d/` and `/edit`
-
-5. **Share the sheet** with your service account:
-   - Click the **"Share"** button (top right)
-   - Paste the service account email (from Step 6b):
-     ```
-     whatsapp-bot@whatsapp-ticket-bot.iam.gserviceaccount.com
-     ```
-   - Set permission to **"Editor"**
-   - Uncheck "Notify people"
-   - Click **"Share"**
-
-6. The sheet will have **two tabs** (the bot creates them automatically):
-   - **Sheet1** → For deliveries (sending links)
-   - **Trades** → Auto-created by bot for ticket backup
-
-✅ Google Sheet is ready.
-
----
-
-## 8. Set Up AI (Choose One)
-
-The bot uses AI to answer natural language queries. Choose ONE option:
+## 7. Set Up AI (Choose One)
 
 ### Option A: Gemini (Recommended — Free)
-
 1. Go to: https://aistudio.google.com/apikey
-2. Sign in with Google
-3. Click **"Create API key"**
-4. Copy the API key (starts with `AIza...`)
-5. Save it — you'll use it in Step 9
+2. Sign in → Click **"Create API key"**
+3. Copy the key (starts with `AIza...`)
 
-### Option B: OpenClaw (If you have it running)
-
-If you already have OpenClaw set up:
-1. Get your API key from OpenClaw config
-2. Note the base URL (usually `http://127.0.0.1:18789/v1`)
+### Option B: OpenClaw
+Use your existing OpenClaw base URL and API key.
 
 ---
 
-## 9. Configure the Bot
+## 8. Configure the Bot
 
-1. **Copy the example config:**
-   ```bash
-   cp .env.example .env
-   ```
+```bash
+cp .env.example .env
+```
 
-2. **Edit `.env`** with your details:
+Edit `.env`:
 
-   ```bash
-   # Mac/Linux
-   nano .env
+```env
+# WhatsApp
+WA_PAIRING_PHONE=+911234567890      ← your bot's number
 
-   # Windows
-   notepad .env
-   ```
+# Registration secret (admins DM this to register)
+REGISTER_SECRET=changeme123          ← CHANGE THIS!
 
-3. **Fill in these values:**
+# Firebase
+FIREBASE_SERVICE_ACCOUNT_FILE=./firebase-service-account.json
+FIREBASE_PROJECT_ID=ticket-bot-ab6bb ← your project ID
 
-   ```env
-   # ── WhatsApp ──
-   # Your bot's phone number (with country code, no spaces)
-   WA_PAIRING_PHONE=+911234567890
+# AI — Option A: Gemini (recommended)
+GEMINI_API_KEY=AIza...
 
-   # ── Registration ──
-   # Choose a secret password (clients DM this to register)
-   # CHANGE THIS to something unique!
-   REGISTER_SECRET=mySecretPass2024
+# AI — Option B: OpenClaw
+# OPENCLAW_BASE_URL=http://127.0.0.1:18789/v1
+# OPENCLAW_API_KEY=your_key
+```
 
-   # ── Google Sheets ──
-   # The JSON file you downloaded (should be in project folder)
-   GOOGLE_SERVICE_ACCOUNT_FILE=./service-account.json
-
-   # Your Google Sheet ID (from Step 7)
-   GOOGLE_SHEET_ID=paste_your_sheet_id_here
-
-   # Enable trades backup to Google Sheets
-   SYNC_TRADES_TO_SHEETS=true
-
-   # ── AI ──
-   # Option A: Gemini (recommended)
-   GEMINI_API_KEY=paste_your_gemini_key_here
-
-   # Option B: OpenClaw (comment out Gemini lines above, uncomment below)
-   # OPENCLAW_BASE_URL=http://127.0.0.1:18789/v1
-   # OPENCLAW_API_KEY=your_openclaw_key
-   # AI_MODEL=claude-sonnet-4-20250514
-   ```
-
-4. **Save the file** (Ctrl+X → Y → Enter in nano)
-
-### Quick Checklist:
-- [ ] `WA_PAIRING_PHONE` = your bot's number with country code
-- [ ] `REGISTER_SECRET` = changed from default
-- [ ] `GOOGLE_SERVICE_ACCOUNT_FILE` = path to your JSON key
-- [ ] `GOOGLE_SHEET_ID` = your sheet ID
-- [ ] `SYNC_TRADES_TO_SHEETS` = true
-- [ ] AI key set (Gemini or OpenClaw)
+### Checklist:
+- [ ] `WA_PAIRING_PHONE` set with country code
+- [ ] `REGISTER_SECRET` changed from default
+- [ ] `FIREBASE_SERVICE_ACCOUNT_FILE` = path to your JSON key
+- [ ] `FIREBASE_PROJECT_ID` = your project ID
+- [ ] AI key set
 
 ---
 
-## 10. Start the Bot
+## 9. Start the Bot
 
 ```bash
 npm run dev
@@ -300,214 +168,143 @@ npm run dev
 
 You should see:
 ```
-===========================================
-  WhatsApp Trade Bot — Starting...
-===========================================
-[Config] Pairing phone: +911234567890
-[Config] Google Sheet ID: your_sheet_id
-[Config] AI: Gemini
-===========================================
-
-[WA] Requesting pairing code for 1234567890...
-
+[Firebase] ✅ Connected to project: ticket-bot-xxxxx
 [WA] ✅ PAIRING CODE: 4829-1753
-
-Enter this code in WhatsApp → Linked Devices → Link a Device → Link with phone number
 ```
 
-⚠️ **Keep this terminal open!** The bot runs as long as the terminal is open.
+⚠️ **Keep this terminal open!**
 
 ---
 
-## 11. Pair WhatsApp
+## 10. Pair WhatsApp
 
-On the **bot's phone** (the number you set in `WA_PAIRING_PHONE`):
+On the **bot's phone**:
 
-1. Open **WhatsApp**
-2. Go to **Settings** → **Linked Devices**
-3. Tap **"Link a Device"**
-4. **Important:** Tap **"Link with phone number instead"** (small text at the bottom)
-5. Enter your **computer's phone number** (any number) when asked
-6. Enter the **pairing code** from the terminal (e.g., `4829-1753`)
+1. Open **WhatsApp** → **Settings** → **Linked Devices**
+2. Tap **"Link a Device"**
+3. Tap **"Link with phone number instead"** (small text at bottom)
+4. Enter the **pairing code** from the terminal
 
-Wait 5-10 seconds. The terminal should show:
+Wait for:
 ```
 [WA] ✅ WhatsApp connected!
-[WA] Building LID→phone cache from group participants...
 [WA] ✅ LID cache built: X mappings from Y groups
-[Sheets] ✅ Connected to Google Sheets
 ```
 
-✅ Bot is connected!
-
-### ⚠️ Pairing Troubleshooting
-- **"Link with phone number" not showing?** → Update WhatsApp to latest version
-- **Code expired?** → Restart the bot (`Ctrl+C` then `npm run dev`)
-- **405 error?** → Too many attempts. Wait 4-24 hours before trying again
-- **Bot disconnects after pairing?** → Normal, it will auto-reconnect
+### ⚠️ Common Pairing Errors
+| Error | Fix |
+|-------|-----|
+| `401` | `rm -rf data/.wa-auth` then restart |
+| `515` | Normal — bot auto-reconnects |
+| `405` | Too many attempts, wait 4-24 hours |
 
 ---
 
-## 12. Register as Admin
+## 11. Register as Admin
 
-From a **different phone** (NOT the bot's phone), send a DM to the bot's WhatsApp number:
+From **any phone** (not the bot's phone), DM the bot's number:
 
 ```
-register mySecretPass2024
+register changeme123
 ```
 (Use the secret you set in `.env`)
 
-The bot should reply:
+Bot replies:
 ```
 ✅ You're registered!
-You can now query me directly.
-
-Try:
-• "show available"
-• "find Liverpool"
-• "how many today?"
+You can now query me.
 ```
 
-✅ You can now query the bot!
-
-### Register More Admins
-Share the secret with other people who should have access. They just DM:
-```
-register mySecretPass2024
-```
 No restart needed. Works instantly.
 
 ---
 
-## 13. Add Bot to Groups
+## 12. Add Bot to Groups
 
-Add the bot's WhatsApp number to your ticket trading groups:
+Add the bot's number to your ticket trading groups:
+1. Open the WhatsApp group → Tap group name → **"Add participants"**
+2. Add the bot's number
 
-1. Open the WhatsApp group
-2. Tap group name → **"Add participants"**
-3. Add the **bot's number**
-
-### ⚠️ Important — Add Groups Gradually!
-- **Day 1:** Add to 5-10 groups
-- **Day 2:** Add 5-10 more
-- **Day 3:** Add 5-10 more
-- Continue until all groups added
-
-**Why?** Adding to 40 groups at once on a new linked device may trigger WhatsApp's spam detection.
+⚠️ **Add gradually:** 5-10 groups/day (not all at once — spam risk)
 
 The bot will:
-- ✅ **Silently listen** to all messages
-- ✅ **Parse ticket listings** (Available/Wanted)
-- ✅ **Save to database** with seller's phone number
-- ❌ **Never send messages** in groups
+- ✅ Listen silently to all ticket messages
+- ✅ Save each ticket to Firebase automatically
+- ❌ Never send messages in groups
 
 ---
 
-## 14. Test Everything
+## 13. Test Everything
 
-### Test 1: Group Parsing
-Post this in any group the bot is in:
+Post this in a group the bot is in:
 ```
 Available
 
-Liverpool v Brentford
+Liverpool v Arsenal
 
 4 x kop £500pp
-5 pair long upper £325pp
+2-2-2 dug out £375pp
 
 Dm
 ```
 
-**Check terminal** — you should see:
-```
-[WA] 📦 Saved 2 trade(s) from "GroupName" by YourName (0 duplicates skipped)
-```
+Check **Firebase Console → Firestore → tickets** — you should see 4 records:
+- 1 quad (kop)
+- 3 pairs (dug out from 2-2-2 expansion)
 
-### Test 2: Query the Bot
-DM the bot from your registered number:
-```
-show available
-```
-
-Bot should reply with the tickets you just posted, including phone numbers.
-
-### Test 3: Check Google Sheets
-Open your Google Sheet → **"Trades"** tab (auto-created)
-You should see the parsed trades with all details.
-
-### Test 4: Search
-DM the bot:
+Then DM the bot:
 ```
 find Liverpool
 ```
-Should return the Liverpool tickets with seller contact info.
+
+Should return the tickets with seller phone number.
+
+**See [TEST-MESSAGES.md](./TEST-MESSAGES.md) for the full test suite.**
 
 ---
 
-## 15. Daily Usage
+## 14. Daily Usage
 
 ### Query Commands (DM the bot)
 
 | Command | What it does |
 |---------|-------------|
-| `show available` | List all available tickets |
-| `show wanted` | List all wanted tickets |
+| `show available` | List available tickets with phone numbers |
+| `show wanted` | List wanted tickets |
 | `find Liverpool` | Search by event name |
-| `who is selling Arsenal?` | Find sellers with phone numbers |
+| `who is selling Arsenal?` | Find sellers + contact info |
 | `how many today?` | Today's stats |
-| `show all from last week` | Historical data |
-| `send pending deliveries` | Send links from Google Sheet |
-
-### Delivery System (Sending Links)
-1. Open Google Sheet → **Sheet1** tab
-2. Column A = Phone number (with country code)
-3. Column B = Link to send
-4. DM bot: `send pending deliveries`
-5. Bot sends each link and marks Column C as "delivered"
+| `find kop tickets` | Search by area/section |
 
 ### Stopping the Bot
 Press `Ctrl+C` in the terminal.
 
-### Restarting the Bot
+### Restarting
 ```bash
-cd ampere-client-whatsapp
 npm run dev
 ```
-No need to re-pair — it remembers the WhatsApp session.
+No re-pairing needed — session is saved in `data/.wa-auth/`.
 
-### Resetting Everything (Fresh Start)
+### Full Reset
 ```bash
-# Delete database + WhatsApp session
-rm -rf data/bot.db data/.wa-auth
-
-# Also clean Google Sheet "Trades" tab manually
-
-# Restart
+rm -rf data/.wa-auth   # re-pair WhatsApp
+# Also delete Firebase collections manually if needed
 npm run dev
-# You'll need to re-pair WhatsApp
 ```
 
 ---
 
-## 16. Troubleshooting
+## 15. Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| **Bot not receiving group messages** | Verify bot's number is in the group. Send a NEW message (old messages aren't captured) |
-| **"Unable to parse range: Trades!A:L"** | The "Trades" tab doesn't exist yet. Restart the bot — it auto-creates the tab |
-| **Pairing code not appearing** | Wait 3-5 seconds. If nothing, restart the bot |
-| **405 pairing error** | Too many pairing attempts. Wait 4-24 hours |
-| **LID instead of phone number** | Normal for DMs. Group messages resolve automatically via participant metadata |
-| **Google Sheets sync failing** | Check: (1) Service account has Editor access, (2) Sheet ID is correct, (3) API is enabled |
-| **"ALLOWLIST is empty" warning** | Normal! Admins register via DM. The warning is just informational |
-| **Bot disconnects randomly** | It auto-reconnects. If it doesn't, restart with `npm run dev` |
-| **Duplicate entries in Google Sheets** | This was fixed. Make sure you're running the latest code (`git pull`) |
-| **AI queries not working** | Check your Gemini/OpenClaw API key in `.env` |
-| **"register" command not working** | Make sure you're typing exactly: `register YOUR_SECRET` (case sensitive) |
-
-### Getting Help
-- GitHub Issues: https://github.com/harshil-l/ampere-client-whatsapp/issues
-- Check logs in terminal for error messages
+| `401` on startup | `rm -rf data/.wa-auth` then restart |
+| `515` on startup | Normal, bot auto-reconnects in 5s |
+| Bot not receiving group messages | Verify bot's number is in the group |
+| LID instead of phone number | Normal for DMs; group messages resolve automatically |
+| Firebase permission error | Check service account JSON is correct and has Firestore access |
+| `register` not working | Type exactly: `register YOUR_SECRET` (case sensitive) |
+| AI queries failing | Check Gemini/OpenClaw API key in `.env` |
 
 ---
 
@@ -515,28 +312,26 @@ npm run dev
 
 ```
 ampere-client-whatsapp/
-├── src/                    ← Source code (don't edit unless you know what you're doing)
-│   ├── index.ts            ← Entry point
-│   ├── whatsapp.ts         ← WhatsApp connection
-│   ├── parser.ts           ← Ticket message parser
-│   ├── db.ts               ← Database
-│   ├── sheets.ts           ← Google Sheets
-│   ├── query.ts            ← AI queries
-│   ├── delivery.ts         ← Delivery system
-│   └── config.ts           ← Configuration
-├── data/                   ← Auto-created, contains database + WhatsApp auth
-├── .env                    ← Your configuration (NEVER share this!)
-├── .env.example            ← Example configuration
-├── service-account.json    ← Google service account key (NEVER share this!)
-├── package.json            ← Dependencies
-└── README.md               ← Quick reference
+├── src/
+│   ├── index.ts              ← Entry point
+│   ├── whatsapp.ts           ← WhatsApp connection
+│   ├── parser.ts             ← Ticket parser + quantity expansion
+│   ├── firebase.ts           ← Firestore CRUD
+│   ├── query.ts              ← AI query handler
+│   └── config.ts             ← Config
+├── data/                     ← Auto-created (auth + cache)
+├── .env                      ← Your config (NEVER share!)
+├── firebase-service-account.json ← Firebase key (NEVER share!)
+├── .env.example              ← Config template
+├── SETUP-GUIDE.md            ← This file
+├── TEST-MESSAGES.md          ← Test cases
+└── README.md                 ← Overview
 ```
 
-### ⚠️ Files to NEVER Share
-- `.env` — contains your API keys and secrets
-- `service-account.json` — Google Cloud credentials
-- `data/.wa-auth/` — WhatsApp session keys
-- `data/bot.db` — your trade database
+### ⚠️ Files to NEVER Share / Commit
+- `.env`
+- `firebase-service-account.json`
+- `data/.wa-auth/`
 
 ---
 

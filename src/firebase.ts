@@ -83,14 +83,10 @@ export async function saveTickets(tickets: Ticket[]): Promise<string[]> {
   return refs.map((r) => r.id);
 }
 
-export async function isDuplicate(messageId: string, groupJid: string): Promise<boolean> {
-  const db = getDb();
-  const snap = await db.collection("tickets")
-    .where("message_id", "==", messageId)
-    .where("group_jid", "==", groupJid)
-    .limit(1)
-    .get();
-  return !snap.empty;
+// Deduplication disabled — save all messages including re-posts
+// TODO: enable if client requests dedup in future
+export async function isDuplicate(_messageId: string, _groupJid: string): Promise<boolean> {
+  return false;
 }
 
 export async function queryTickets(filters: {
