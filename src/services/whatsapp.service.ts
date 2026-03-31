@@ -8,15 +8,11 @@ import { Boom } from "@hapi/boom";
 import pino from "pino";
 import path from "path";
 import fs from "fs";
-import { config, isAllowlisted } from "./config";
-import { parseAllTickets, isTicketMessage } from "./parser";
-import { saveTickets, isDuplicate, registerAdmin } from "./firebase";
-import { handleQuery } from "./query";
+import { config } from "../config";
 
 const AUTH_DIR = path.join(process.cwd(), "data", ".wa-auth");
 const logger = pino({ level: "silent" });
 
-// Suppress Baileys decrypt errors
 const originalConsoleError = console.error;
 console.error = (...args: any[]) => {
   const msg = args[0]?.toString() || "";
@@ -25,11 +21,12 @@ console.error = (...args: any[]) => {
 };
 
 let sock: ReturnType<typeof makeWASocket> | null = null;
-
-// ── LID → Phone cache (built from group metadata) ──
 const lidToPhoneCache = new Map<string, string>();
 
-// ── Public send function ──
+export function getSock() {
+  return sock;
+}
+
 export async function sendMessage(target: string, message: string): Promise<void> {
   if (!sock) throw new Error("WhatsApp not connected");
   const jid = target.includes("@") ? target : `${target.replace(/\D/g, "")}@s.whatsapp.net`;
@@ -37,8 +34,7 @@ export async function sendMessage(target: string, message: string): Promise<void
   console.log(`[WA] Sent to ${jid}: ${message.slice(0, 60)}...`);
 }
 
-// ── Resolve LID via signal repository ──
-async function resolveLidToPhone(jid: string): Promise<string | null> {
+export async function resolveLidToPhone(jid: string): Promise<string | null> {
   if (!sock || !jid.endsWith("@lid")) return null;
   try {
     const signalRepo = (sock as any).signalRepository;
@@ -50,8 +46,7 @@ async function resolveLidToPhone(jid: string): Promise<string | null> {
   } catch { return null; }
 }
 
-// ── Resolve LID via group participant metadata ──
-async function resolveLidFromGroups(lidJid: string): Promise<string | null> {
+export async function resolveLidFromGroups(lidJid: string): Promise<string | null> {
   if (!sock) return null;
   const lid = lidJid.replace(/@.*/, "");
   if (lidToPhoneCache.has(lid)) return lidToPhoneCache.get(lid)!;
@@ -71,104 +66,7 @@ async function resolveLidFromGroups(lidJid: string): Promise<string | null> {
   } catch { return null; }
 }
 
-// ── Handle incoming messages ──
-async function onMessage(msg: proto.IWebMessageInfo) {
-  const key = msg.key;
-  const isGroup = key.remoteJid?.endsWith("@g.us");
-  if (key.fromMe) return;
-
-  const text =
-    msg.message?.conversation ||
-    msg.message?.extendedTextMessage?.text ||
-    msg.message?.ephemeralMessage?.message?.conversation ||
-    "";
-
-  if (!text) return;
-
-  const sender = msg.pushName || "Unknown";
-  const remoteJid = key.remoteJid || "";
-
-  // ── Extract sender phone ──
-  let rawJid = key.participant || remoteJid || "";
-  let senderPhone = rawJid.replace(/@.+/, "");
-
-  if (isGroup && key.participant?.endsWith("@s.whatsapp.net")) {
-    senderPhone = key.participant.replace(/@.+/, "");
-  } else if (rawJid.endsWith("@lid")) {
-    const resolved =
-      (await resolveLidToPhone(rawJid)) ||
-      (await resolveLidFromGroups(rawJid));
-    if (resolved) senderPhone = resolved;
-  }
-
-  // ── GROUP: parse ticket messages ──
-  if (isGroup) {
-    if (!isTicketMessage(text)) return;
-
-    const groupJid = key.remoteJid || "";
-    const messageId = key.id || "";
-    let groupName = groupJid;
-
-    try {
-      if (sock) {
-        const meta = await sock.groupMetadata(groupJid).catch(() => null);
-        if (meta) groupName = meta.subject;
-      }
-    } catch { /* ignore */ }
-
-    // Dedup by message ID
-    if (await isDuplicate(messageId, groupJid)) {
-      console.log(`[WA] ⏭️  Duplicate message skipped: ${messageId}`);
-      return;
-    }
-
-    const tickets = parseAllTickets(text, {
-      sender_name: sender,
-      sender_phone: senderPhone,
-      group_name: groupName,
-      group_jid: groupJid,
-      message_id: messageId,
-    });
-
-    if (!tickets.length) return;
-
-    await saveTickets(tickets as any);
-    console.log(`[WA] 🎫 Saved ${tickets.length} ticket(s) from "${groupName}" by ${sender}`);
-    return;
-  }
-
-  // ── DM: admin commands ──
-  if (!isGroup) {
-    console.log(`[WA] DM from: ${senderPhone} (raw JID: ${remoteJid})`);
-    const lower = text.toLowerCase().trim();
-
-    // Registration (works for anyone)
-    if (lower === `register ${config.registerSecret}`) {
-      console.log(`[WA] 🔑 Registration from: ${senderPhone} (${sender})`);
-      const success = await registerAdmin(senderPhone, sender);
-      await sendMessage(remoteJid,
-        success
-          ? `✅ You're registered!\n\nYou can now query me.\n\nTry:\n• "show available"\n• "find Liverpool"\n• "how many today?"`
-          : `✅ You're already registered! Just ask me a question.`
-      );
-      return;
-    }
-
-    // Allowlist check
-    if (!(await isAllowlisted(senderPhone))) {
-      console.log(`[WA] ❌ Not registered: ${senderPhone}`);
-      return;
-    }
-
-    console.log(`[WA] 💬 Query from ${sender}: ${text}`);
-    await sendMessage(remoteJid, "⏳ Looking that up...");
-    const answer = await handleQuery(text);
-    await sendMessage(remoteJid, answer);
-  }
-}
-
-// ── Start WhatsApp ──
-export async function startWhatsApp(): Promise<void> {
+export async function startWhatsApp(onMessageHandler: (msg: proto.IWebMessageInfo) => Promise<void>): Promise<void> {
   if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -184,7 +82,6 @@ export async function startWhatsApp(): Promise<void> {
     browser: ["Mac OS", "Chrome", "130.0.0"],
   });
 
-  // ── Pairing ──
   if (!state.creds.registered) {
     if (!config.waPairingPhone) {
       console.error("[WA] ❌ WA_PAIRING_PHONE not set in .env");
@@ -209,15 +106,14 @@ export async function startWhatsApp(): Promise<void> {
       if (shouldReconnect) {
         console.log("[WA] Reconnecting in 5s...");
         await sleep(5000);
-        startWhatsApp();
+        startWhatsApp(onMessageHandler);
       }
     }
 
     if (connection === "open") {
       console.log("[WA] ✅ WhatsApp connected!");
-      console.log("[WA] Listening to groups silently. Never sending to groups.");
+      console.log("[WA] Listening to groups silently.");
 
-      // Build LID→phone cache from all groups
       try {
         const groups = await sock!.groupFetchAllParticipating();
         let cached = 0;
@@ -241,7 +137,7 @@ export async function startWhatsApp(): Promise<void> {
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     for (const msg of messages) {
-      await onMessage(msg).catch((e) =>
+      await onMessageHandler(msg).catch((e) =>
         console.error("[WA] Message handler error:", e.message)
       );
     }

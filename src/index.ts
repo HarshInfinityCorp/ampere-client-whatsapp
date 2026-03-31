@@ -1,6 +1,6 @@
 import { config } from "./config";
-import { initFirebase } from "./firebase";
-import { startWhatsApp } from "./whatsapp";
+import { initFirebase } from "./services/firebase.service";
+import { startWhatsApp } from "./services/whatsapp.service";
 
 console.log("===========================================");
 console.log("  WhatsApp Ticket Trading Bot — Starting...");
@@ -15,12 +15,11 @@ if (!config.waPairingPhone) {
   process.exit(1);
 }
 
-async function main() {
-  // Init Firebase
-  initFirebase();
+import { onMessage } from "./handlers/message.handler";
 
-  // Start WhatsApp
-  await startWhatsApp();
+async function main() {
+  initFirebase();
+  await startWhatsApp(onMessage);
 }
 
 main().catch((e) => {

@@ -19,28 +19,3 @@ export const config = {
   // Delivery
   deliveryPollInterval: parseInt(process.env.DELIVERY_POLL_INTERVAL || "5"),
 };
-
-// LID → phone mapping cache (populated from group metadata)
-export const lidPhoneMap = new Map<string, string>();
-
-export function registerLid(lid: string, phone: string) {
-  if (lid && phone) lidPhoneMap.set(lid, phone);
-}
-
-/**
- * Check if a sender is allowlisted.
- * Checks Firebase admins collection (async).
- */
-export async function isAllowlisted(phone: string): Promise<boolean> {
-  const { isAdminLid } = await import("./firebase");
-  const digits = phone.replace(/\D/g, "");
-
-  // Check LID map
-  const resolvedPhone = lidPhoneMap.get(phone);
-  if (resolvedPhone) {
-    const resolvedDigits = resolvedPhone.replace(/\D/g, "");
-    if (await isAdminLid(resolvedDigits)) return true;
-  }
-
-  return isAdminLid(digits);
-}
