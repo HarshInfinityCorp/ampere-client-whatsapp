@@ -313,19 +313,19 @@ npm run dev
 ```
 ampere-client-whatsapp/
 ├── src/
-│   ├── index.ts              ← Entry point
-│   ├── whatsapp.ts           ← WhatsApp connection
-│   ├── parser.ts             ← Ticket parser + quantity expansion
-│   ├── firebase.ts           ← Firestore CRUD
-│   ├── query.ts              ← AI query handler
-│   └── config.ts             ← Config
-├── data/                     ← Auto-created (auth + cache)
-├── .env                      ← Your config (NEVER share!)
+│   ├── config/           ← Env configuration
+│   ├── handlers/         Message, parser, and query handlers
+│   ├── services/         WhatsApp, Firebase, and AI (OpenClaw) integrations
+│   ├── types/            Global TS definitions
+│   ├── utils/            Fallbacks, memory cache
+│   └── index.ts          ← Entry point
+├── data/                 ← Auto-created (auth + cache)
+├── .env                  ← Your config (NEVER share!)
 ├── firebase-service-account.json ← Firebase key (NEVER share!)
-├── .env.example              ← Config template
-├── SETUP-GUIDE.md            ← This file
-├── TEST-MESSAGES.md          ← Test cases
-└── README.md                 ← Overview
+├── .env.example          ← Config template
+├── SETUP-GUIDE.md        ← This file
+├── TEST-MESSAGES.md      ← Test cases
+└── README.md             ← Overview
 ```
 
 ### ⚠️ Files to NEVER Share / Commit

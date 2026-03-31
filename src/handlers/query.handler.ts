@@ -38,7 +38,11 @@ export async function handleQuery(question: string, adminPhone: string = "unknow
       case "general":
       case "unknown":
       default:
-        tickets = await queryTickets({ limit: 200 });
+        if (intent.event || intent.area) {
+          tickets = await queryTickets({ event: intent.event, area: intent.area });
+        } else {
+          tickets = await queryTickets({ limit: 200 });
+        }
         break;
     }
   } catch (e: any) {

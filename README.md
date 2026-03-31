@@ -9,11 +9,13 @@ A WhatsApp bot that silently monitors groups for ticket buy/sell listings, saves
 - **Silent group listener** — Monitors WhatsApp groups, never sends messages to groups
 - **Smart ticket parser** — Extracts event, area, price, currency, row, seat notes
 - **Quantity expansion** — `2-2-2 dug out £375pp` → 3 separate pair records in DB
-- **AI-powered queries** — DM the bot: "find Liverpool tickets", "who's selling Arsenal?"
+- **Conversational Memory** — Follow-up queries work exactly like ChatGPT (remembers context for 15 mins)
+- **AI-powered queries** — DM the bot: "find Liverpool tickets", "which of those are cheapest?"
 - **Seller contact info** — Returns seller's real phone number with every query
-- **Firebase Firestore** — Cloud database, no data loss, queryable from anywhere
+- **Firebase Firestore** — Cloud database, no data limits, full scanning, queryable from anywhere
 - **Auto-registration** — Admins register via DM, no config file editing needed
 - **LID resolution** — Resolves WhatsApp privacy IDs to real phone numbers
+- **Ampere.sh Ready** — Engineered as a modular, stateless agent ready for cloud deployment
 
 ---
 
@@ -121,18 +123,28 @@ First register: DM `register your_secret`
 
 ```
 ├── src/
-│   ├── index.ts        ← Entry point
-│   ├── whatsapp.ts     ← WhatsApp connection + message handling
-│   ├── parser.ts       ← Ticket message parser + quantity expansion
-│   ├── firebase.ts     ← Firebase Firestore CRUD + admin helpers
-│   ├── query.ts        ← AI-powered query handler
-│   └── config.ts       ← Environment config
+│   ├── config/
+│   │   └── index.ts            ← Environment config
+│   ├── handlers/
+│   │   ├── message.handler.ts  ← DM and group routing
+│   │   ├── parser.handler.ts   ← Ticket parser + quantity expansion
+│   │   └── query.handler.ts    ← AI query orchestrator
+│   ├── services/
+│   │   ├── ai.service.ts       ← LLM Intent Extractor (OpenClaw/Gemini)
+│   │   ├── firebase.service.ts ← Firestore full-DB CRUD operations
+│   │   └── whatsapp.service.ts ← Baileys connection manager
+│   ├── types/
+│   │   └── index.ts            ← TypeScript interfaces
+│   ├── utils/
+│   │   ├── fallback.util.ts    ← Hardcoded query fallback when AI is down
+│   │   └── memory.util.ts      ← Conversational memory caching
+│   └── index.ts                ← App initialization
 ├── data/
-│   └── .wa-auth/       ← WhatsApp auth (auto-created)
-├── .env                ← Your config (never commit!)
-├── .env.example        ← Config template
-├── SETUP-GUIDE.md      ← Full setup instructions
-├── TEST-MESSAGES.md    ← Test cases
+│   └── .wa-auth/               ← WhatsApp auth (auto-created)
+├── .env                        ← Your config (never commit!)
+├── .env.example                ← Config template
+├── SETUP-GUIDE.md              ← Full setup instructions
+├── TEST-MESSAGES.md            ← Test cases
 └── README.md
 ```
 
