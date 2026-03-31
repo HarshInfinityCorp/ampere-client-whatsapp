@@ -2,14 +2,18 @@ import { queryTickets, getStats } from "../services/firebase.service";
 import { extractIntentLLM, getAIClient, getAIModel } from "../services/ai.service";
 import { smartFallback, buildTicketContext } from "../utils/fallback.util";
 import { Ticket } from "../types";
+import { getChatHistory, addMessageToHistory, ChatMessage } from "../utils/memory.util";
 
-export async function handleQuery(question: string): Promise<string> {
+export async function handleQuery(question: string, adminPhone: string = "unknown"): Promise<string> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const todayStr = today.toISOString().split("T")[0];
 
-  // Step 1: Extract intent dynamically using LLM
-  const intent = await extractIntentLLM(question);
+  // Fetch recent conversational memory for this admin
+  const history = getChatHistory(adminPhone);
+
+  // Step 1: Extract intent dynamically using LLM (with history)
+  const intent = await extractIntentLLM(question, history);
   console.log(`[Query] Intent extracted:`, JSON.stringify(intent));
 
   // Step 2: Query Firestore with extracted filters
@@ -74,12 +78,18 @@ INSTRUCTIONS:
       model,
       messages: [
         { role: "system", content: systemPrompt },
+        ...history,
         { role: "user", content: question },
       ],
     });
 
     const answer = response.choices[0]?.message?.content?.trim();
     if (!answer) throw new Error("Empty AI response");
+
+    // Persist to memory!
+    addMessageToHistory(adminPhone, "user", question);
+    addMessageToHistory(adminPhone, "assistant", answer);
+
     return answer;
 
   } catch (error: any) {

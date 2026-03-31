@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { config } from "../config";
 import { QueryIntent } from "../types";
+import { ChatMessage } from "../utils/memory.util";
 
 export function getAIClient(): OpenAI {
   if (config.geminiApiKey) {
@@ -43,7 +44,7 @@ function extractJSONFromLLM(text: string): any {
  * Uses the OpenAI SDK to extract structured search intents from a natural language query.
  * Designed to be completely model-agnostic.
  */
-export async function extractIntentLLM(question: string): Promise<QueryIntent> {
+export async function extractIntentLLM(question: string, history: ChatMessage[] = []): Promise<QueryIntent> {
   const systemPrompt = `You are a ticket trading search parser.
 Your exact job is to analyze the user's message and determine what they want.
 You MUST reply with ONLY a raw JSON object. Do not include greetings, explanations, or any other text.
@@ -72,6 +73,8 @@ Example 2: "how many tickets we have for Slovakia?"
 Example 3: "what are the stats for today"
 {"type": "stats", "event": null, "area": null, "status": null}
 
+Follow up queries: If the user sends a message like "just the ones in block 202" or "how much are they?", look at the conversation history provided below to infer which EVENT they are currently talking about!
+
 Output ONLY valid JSON.`;
 
   try {
@@ -84,6 +87,7 @@ Output ONLY valid JSON.`;
       model,
       messages: [
         { role: "system", content: systemPrompt },
+        ...history,
         { role: "user", content: question },
       ],
       temperature: 0.1,

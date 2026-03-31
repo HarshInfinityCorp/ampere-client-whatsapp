@@ -98,9 +98,9 @@ export async function onMessage(msg: proto.IWebMessageInfo) {
       }
     }
 
-    console.log(`[WA] 💬 Query from ${sender}: ${text}`);
+    console.log(`[WA] 💬 Query from ${sender} (${senderPhone}): ${text}`);
     await sendMessage(remoteJid, "⏳ Looking that up...");
-    const answer = await handleQuery(text);
+    const answer = await handleQuery(text, senderPhone);
     await sendMessage(remoteJid, answer);
   }
 }
