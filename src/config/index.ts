@@ -7,8 +7,7 @@ export const config = {
   registerSecret: (process.env.REGISTER_SECRET || "admin123").toLowerCase(),
 
   // Firebase
-  firebaseServiceAccountFile: process.env.FIREBASE_SERVICE_ACCOUNT_FILE || "./firebase-service-account.json",
-  firebaseProjectId: process.env.FIREBASE_PROJECT_ID || "",
+  neonDatabaseUrl: process.env.NEON_DATABASE_URL || "",
 
   // AI
   geminiApiKey: process.env.GEMINI_API_KEY || "",

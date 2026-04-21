@@ -1,5 +1,3 @@
-import * as admin from "firebase-admin";
-
 export interface Ticket {
   id?: string;
   event: string | null;
@@ -18,7 +16,7 @@ export interface Ticket {
   group_name: string;
   group_jid: string;
   message_id: string;
-  created_at?: admin.firestore.Timestamp;
+  created_at?: Date;
 }
 
 export interface TicketMeta {
@@ -34,6 +32,9 @@ export interface QueryIntent {
   event?: string;
   area?: string;
   status?: "available" | "wanted";
+  timeframe?: "today" | "yesterday" | "this_week" | "all_time";
+  max_price?: number;
+  min_quantity?: number;
 }
 
 export interface StatsData {

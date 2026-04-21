@@ -1,6 +1,6 @@
 import { proto } from "@whiskeysockets/baileys";
 import { config } from "../config";
-import { saveTickets, isDuplicate, registerAdmin, isAdminLid } from "../services/firebase.service";
+import { saveTickets, isDuplicate, registerAdmin, isAdminLid } from "../services/neon.service";
 import { resolveLidToPhone, resolveLidFromGroups, sendMessage, getSock } from "../services/whatsapp.service";
 import { parseAllTickets, isTicketMessage } from "./parser.handler";
 import { handleQuery } from "./query.handler";

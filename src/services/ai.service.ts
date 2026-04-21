@@ -54,26 +54,37 @@ Use the following strict JSON schema:
   "type": "search" | "stats" | "list_available" | "list_wanted" | "general" | "unknown",
   "event": "string or null",
   "area": "string or null",
-  "status": "available" | "wanted" | null
+  "status": "available" | "wanted" | null,
+  "timeframe": "today" | "yesterday" | "this_week" | "all_time" | null,
+  "max_price": number | null,
+  "min_quantity": number | null
 }
 
 Guidelines:
+- SYNONYMS: "Selling", "Seller", "Available", "For Sale" -> status="available"
+- SYNONYMS: "Buying", "Buyer", "Wanted", "Looking For", "Need" -> status="wanted"
+- TIMEFRAMES: Look for "today", "yesterday", "this week" -> timeframe
+- PRICING: "under 100", "max 50", "cheaper than 200" -> max_price (just the number)
+- QUANTITY: "3 seats together", "I need 2", "pair" -> min_quantity (e.g. 3, 2, 2)
 - If asking for overall/general stats (e.g. "how many today", "sales overall"): type="stats"
 - If searching for a team/event or asking for stats ABOUT a specific event (e.g. "who has liverpool?", "how many liverpool tickets?"): type="search", event="<team name>"
 - If asking for available tickets/selling: type="list_available", status="available"
 - If asking for wanted/looking for: type="list_wanted", status="wanted"
 - If they mention seating areas like "kop", "lower", "block 95": type="search", area="<area>"
 
-Example 1: "any 1 selling arsnl tix in the lower tiers?"
-{"type": "search", "event": "arsenal", "area": "lower", "status": "available"}
+Example 1 (Single message): "any 1 selling arsnl tix in the lower tiers under 150 today?"
+{"type": "search", "event": "arsenal", "area": "lower", "status": "available", "timeframe": "today", "max_price": 150, "min_quantity": null}
 
-Example 2: "how many tickets we have for Slovakia?"
-{"type": "search", "event": "slovakia", "area": null, "status": null}
+Example 2 (Looking for buyers): "who is buying 3 liverpool tickets together?"
+{"type": "search", "event": "liverpool", "area": null, "status": "wanted", "timeframe": null, "max_price": null, "min_quantity": 3}
 
-Example 3: "what are the stats for today"
-{"type": "stats", "event": null, "area": null, "status": null}
+Example 3 (Conversational Follow-up):
+History: User asked "Find me Chelsea tickets" -> Assistant answered "Found 5..."
+User asks: "Which of those are cheapest?"
+{"type": "search", "event": "chelsea", "area": null, "status": null}
 
 Follow up queries: If the user sends a message like "just the ones in block 202" or "how much are they?", look at the conversation history provided below to infer which EVENT they are currently talking about!
+CRITICAL RULE: If the user changes the subject completely or asks a global command (e.g., "show me all wanted tickets", "how many today?", "what else is available?"), you MUST clear the previous event context. Do NOT carry over the old event name into the new intent.
 
 Output ONLY valid JSON.`;
 
@@ -104,7 +115,10 @@ Output ONLY valid JSON.`;
       type: parsed.type || "unknown",
       event: parsed.event || undefined,
       area: parsed.area || undefined,
-      status: parsed.status || undefined
+      status: parsed.status || undefined,
+      timeframe: parsed.timeframe || undefined,
+      max_price: parsed.max_price || undefined,
+      min_quantity: parsed.min_quantity || undefined
     };
 
     console.log(`[AI Intent] Parsed intent:`, JSON.stringify(intent));
@@ -144,7 +158,7 @@ function extractIntentFromKeywords(question: string): QueryIntent {
 
   // Check for status
   if (/sell|avail/i.test(q)) return { type: "list_available", status: "available" };
-  if (/want|look|need|buy/i.test(q)) return { type: "list_wanted", status: "wanted" };
+  if (/want|look|need|buy|buyer/i.test(q)) return { type: "list_wanted", status: "wanted" };
 
   return { type: "general" };
 }

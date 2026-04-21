@@ -1,12 +1,12 @@
 import { config } from "./config";
-import { initFirebase } from "./services/firebase.service";
+import { initNeon } from "./services/neon.service";
 import { startWhatsApp } from "./services/whatsapp.service";
 
 console.log("===========================================");
 console.log("  WhatsApp Ticket Trading Bot — Starting...");
 console.log("===========================================");
 console.log(`[Config] Pairing phone: ${config.waPairingPhone || "⚠️ NOT SET"}`);
-console.log(`[Config] Firebase: ${config.firebaseServiceAccountFile}`);
+console.log(`[Config] Database: Neon (PostgreSQL)`);
 console.log(`[Config] AI: ${config.geminiApiKey ? "Gemini" : "OpenClaw"}`);
 console.log("===========================================\n");
 
@@ -18,7 +18,7 @@ if (!config.waPairingPhone) {
 import { onMessage } from "./handlers/message.handler";
 
 async function main() {
-  initFirebase();
+  await initNeon();
   await startWhatsApp(onMessage);
 }
 
