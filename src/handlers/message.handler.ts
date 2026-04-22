@@ -76,31 +76,35 @@ export async function onMessage(msg: proto.IWebMessageInfo) {
 
   // DM Command Handling
   if (!isGroup) {
-    console.log(`[WA] DM from: ${senderPhone} (raw JID: ${remoteJid})`);
-    const lower = text.toLowerCase().trim();
+    try {
+      console.log(`[WA] DM from: ${senderPhone} (raw JID: ${remoteJid})`);
+      const lower = text.toLowerCase().trim();
 
-    if (lower === `register ${config.registerSecret}`) {
-      console.log(`[WA] 🔑 Registration from: ${senderPhone} (${sender})`);
-      const success = await registerAdmin(senderPhone, sender);
-      await sendMessage(remoteJid,
-        success
-          ? `✅ You're registered!\n\nYou can now query me.\n\nTry:\n• "show available"\n• "find Liverpool"\n• "how many today?"`
-          : `✅ You're already registered! Just ask me a question.`
-      );
-      return;
-    }
-
-    if (!(await isAllowlisted(senderPhone))) {
-      const allowViaLidRegex = await isAllowlisted((await resolveLidToPhone(remoteJid) || ""));
-      if (!allowViaLidRegex) {
-        console.log(`[WA] ❌ Not registered: ${senderPhone}`);
+      if (lower === `register ${config.registerSecret}`) {
+        console.log(`[WA] 🔑 Registration from: ${senderPhone} (${sender})`);
+        const success = await registerAdmin(senderPhone, sender);
+        await sendMessage(remoteJid,
+          success
+            ? `✅ You're registered!\n\nYou can now query me.\n\nTry:\n• "show available"\n• "find Liverpool"\n• "how many today?"`
+            : `✅ You're already registered! Just ask me a question.`
+        );
         return;
       }
-    }
 
-    console.log(`[WA] 💬 Query from ${sender} (${senderPhone}): ${text}`);
-    await sendMessage(remoteJid, "⏳ Looking that up...");
-    const answer = await handleQuery(text, senderPhone);
-    await sendMessage(remoteJid, answer);
+      if (!(await isAllowlisted(senderPhone))) {
+        const allowViaLidRegex = await isAllowlisted((await resolveLidToPhone(remoteJid) || ""));
+        if (!allowViaLidRegex) {
+          console.log(`[WA] ❌ Not registered: ${senderPhone}`);
+          return;
+        }
+      }
+
+      console.log(`[WA] 💬 Query from ${sender} (${senderPhone}): ${text}`);
+      await sendMessage(remoteJid, "⏳ Looking that up...");
+      const answer = await handleQuery(text, senderPhone);
+      await sendMessage(remoteJid, answer);
+    } catch (dmErr: any) {
+      console.error("[WA] ❌ FATAL DM Error:", dmErr);
+    }
   }
 }

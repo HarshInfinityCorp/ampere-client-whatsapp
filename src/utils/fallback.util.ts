@@ -48,9 +48,10 @@ export function buildTicketContext(tickets: Ticket[], totalCount: number): strin
   if (!tickets.length) return "No matching tickets found in the database.";
 
   const showing = tickets.slice(0, AI_CONTEXT_CAP);
-  const lines = showing.map((t) =>
-    `[${t.availability_status.toUpperCase()}] ${t.event || "?"} | ${t.area_text || "?"} | ${t.ticket_type || "?"} x${t.quantity_value ?? "?"} | ${t.currency || ""}${t.price ?? "no price"} | from: ${t.sender_name} (📞 ${t.sender_phone}) | group: ${t.group_name}`
-  );
+  const lines = showing.map((t) => {
+    const timeStr = t.created_at ? new Date(t.created_at).toLocaleString() : "Unknown time";
+    return `[${t.availability_status.toUpperCase()}] ${t.event || "?"} | ${t.area_text || "?"} | ${t.ticket_type || "?"} x${t.quantity_value ?? "?"} | ${t.currency || ""}${t.price ?? "no price"} | from: ${t.sender_name} (📞 ${t.sender_phone}) | group: ${t.group_name} | posted: ${timeStr}`;
+  });
 
   let context = lines.join("\n");
   if (totalCount > AI_CONTEXT_CAP) {

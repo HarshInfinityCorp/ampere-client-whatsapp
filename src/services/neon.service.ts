@@ -1,11 +1,11 @@
-import { neon, neonConfig } from '@neondatabase/serverless';
+import { Pool } from 'pg';
 import { config } from '../config';
 import { Ticket, StatsData } from '../types';
 
-let sql: any = null;
+let pool: Pool | null = null;
 
 export async function initNeon(): Promise<void> {
-  if (sql) return;
+  if (pool) return;
 
   const url = process.env.NEON_DATABASE_URL || config.neonDatabaseUrl;
   if (!url) {
@@ -13,22 +13,44 @@ export async function initNeon(): Promise<void> {
     process.exit(1);
   }
 
-  // Create Neon serverless HTTP connection logic
-  sql = neon(url);
-
-  console.log(`[Neon] ✅ Connected to Neon PostgreSQL! Running migrations...`);
+  // Use persistent TCP connection pooling instead of serverless HTTP fetch
+  pool = new Pool({
+    connectionString: url,
+    ssl: { rejectUnauthorized: false },
+    // Cloud connection resilience:
+    keepAlive: true, // Prevent NAT firewalls from silently dropping the connection
+    idleTimeoutMillis: 30000, // Close idle connections after 30 seconds
+    connectionTimeoutMillis: 15000, // Wait 15 seconds for Neon cold starts
+    max: 5, // Keep the pool small for the free tier
+  });
 
   try {
-    await sql`
+    let client: any = null;
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        client = await pool.connect();
+        break;
+      } catch (e: any) {
+        console.warn(`[Neon] ⏳ Wakeup delay detected. Retrying... (${retries} left)`);
+        retries--;
+        if (retries === 0) throw e;
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+    
+    console.log(`[Neon] ✅ Connected via TCP to Neon PostgreSQL! Running migrations...`);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS admins (
         id SERIAL PRIMARY KEY,
         lid TEXT NOT NULL UNIQUE,
         name TEXT DEFAULT 'Unknown',
         registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
-    `;
+    `);
 
-    await sql`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS tickets (
         id SERIAL PRIMARY KEY,
         event TEXT,
@@ -49,47 +71,78 @@ export async function initNeon(): Promise<void> {
         message_id TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
-    `;
+    `);
+    
+    client.release();
     console.log(`[Neon] ✅ DB Schema is ready.`);
   } catch (err: any) {
-    console.error(`[Neon] ❌ Error initializing schema:`, err.message);
+    console.error(`[Neon] ❌ Error initializing schema:`, err);
     process.exit(1);
   }
 }
 
-export function getDb() {
-  if (!sql) throw new Error("Neon not initialized. Call initNeon() first.");
-  return sql;
+export function getDb(): Pool {
+  if (!pool) throw new Error("Neon not initialized. Call initNeon() first.");
+  return pool;
+}
+
+// ── Robust Query Wrapper ──
+
+async function safeQuery(queryStr: string, values?: any[]): Promise<any> {
+  const db = getDb();
+  let retries = 3;
+  let lastError: any;
+
+  while (retries > 0) {
+    try {
+      return await db.query(queryStr, values);
+    } catch (e: any) {
+      lastError = e;
+      // If it's a network/timeout error (like waking up from cold sleep), retry
+      if (e.code === 'ETIMEDOUT' || e.code === 'ECONNRESET' || e.code === 'EHOSTUNREACH') {
+        console.warn(`[Neon] ⏳ Query connection timeout (${e.code}). Retrying... (${retries - 1} left)`);
+        retries--;
+        if (retries === 0) throw lastError;
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+      } else {
+        // If it's a syntax error or logic error, throw immediately
+        throw e;
+      }
+    }
+  }
 }
 
 // ── Ticket operations ──
 
 export async function saveTickets(tickets: Ticket[]): Promise<string[]> {
   if (!tickets.length) return [];
-  const db = getDb();
   
   const ids: string[] = [];
   
+  const insertQuery = `
+    INSERT INTO tickets (
+      event, ticket_type, quantity_value, price, price_type, currency, 
+      area_text, row, seat_note, availability_status, raw_line_text, 
+      sender_name, sender_phone, group_name, group_jid, message_id
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    ) RETURNING id;
+  `;
+  
   for (const t of tickets) {
-    const result = await db`
-      INSERT INTO tickets (
-        event, ticket_type, quantity_value, price, price_type, currency, 
-        area_text, row, seat_note, availability_status, raw_line_text, 
-        sender_name, sender_phone, group_name, group_jid, message_id
-      ) VALUES (
-        ${t.event}, ${t.ticket_type}, ${t.quantity_value}, ${t.price}, ${t.price_type}, ${t.currency},
-        ${t.area_text}, ${t.row}, ${t.seat_note}, ${t.availability_status}, ${t.raw_line_text},
-        ${t.sender_name}, ${t.sender_phone}, ${t.group_name}, ${t.group_jid}, ${t.message_id}
-      ) RETURNING id;
-    `;
-    ids.push(String(result[0].id));
+    const values = [
+      t.event, t.ticket_type, t.quantity_value, t.price, t.price_type, t.currency,
+      t.area_text, t.row, t.seat_note, t.availability_status, t.raw_line_text,
+      t.sender_name, t.sender_phone, t.group_name, t.group_jid, t.message_id
+    ];
+    const result = await safeQuery(insertQuery, values);
+    ids.push(String(result.rows[0].id));
   }
   
   return ids;
 }
 
 export async function isDuplicate(_messageId: string, _groupJid: string): Promise<boolean> {
-  // Deduplication logic bypassed right now, exactly like firebase implementation
   return false;
 }
 
@@ -101,9 +154,7 @@ export async function queryTickets(filters: {
   dateFrom?: Date;
   limit?: number;
 } = {}): Promise<Ticket[]> {
-  const db = getDb();
 
-  // We build a dynamic WHERE clause
   const conditions = ["1=1"];
   const values: any[] = [];
 
@@ -122,20 +173,13 @@ export async function queryTickets(filters: {
     conditions.push(`created_at >= $${values.length}`);
   }
 
-  // Use raw SQL with safe template variables for conditions
   const whereClause = conditions.join(" AND ");
   const limitClause = filters.limit ? `LIMIT ${filters.limit}` : "";
 
-  // Because serverless neon driver `sql` tag function expects simple string interpolation for static strings, 
-  // but array parameters for values. We can use the simple execution format provided by `@neondatabase/serverless`
-  // Actually, `@neondatabase/serverless` using `neon()` handles parameters like a standard JS pg client.
-  // Wait, `sql('SELECT ... WHERE status=$1', [status])` or `sql(query, values)` is allowed.
-  
   const queryStr = `SELECT * FROM tickets WHERE ${whereClause} ORDER BY created_at DESC ${limitClause}`;
   
-  const rows = await db(queryStr, values);
-  
-  let results = rows as Ticket[];
+  const res = await safeQuery(queryStr, values);
+  let results = res.rows as Ticket[];
 
   // Client-side event filter
   if (filters.event) {
@@ -153,16 +197,14 @@ export async function queryTickets(filters: {
 }
 
 export async function getStats(dateFrom?: Date): Promise<StatsData> {
-  const db = getDb();
-  
-  let rows: any;
+  let res;
   if (dateFrom) {
-    rows = await db("SELECT * FROM tickets WHERE created_at >= $1", [dateFrom.toISOString()]);
+    res = await safeQuery("SELECT * FROM tickets WHERE created_at >= $1", [dateFrom.toISOString()]);
   } else {
-    rows = await db("SELECT * FROM tickets");
+    res = await safeQuery("SELECT * FROM tickets");
   }
 
-  const tickets = rows as Ticket[];
+  const tickets = res.rows as Ticket[];
   const available = tickets.filter(t => t.availability_status === "available").length;
   const wanted = tickets.filter(t => t.availability_status === "wanted").length;
 
@@ -182,17 +224,15 @@ export async function getStats(dateFrom?: Date): Promise<StatsData> {
 // ── Admin operations ──
 
 export async function registerAdmin(lid: string, name?: string): Promise<boolean> {
-  const db = getDb();
-  const existing = await db("SELECT 1 FROM admins WHERE lid = $1 LIMIT 1", [lid]);
+  const res = await safeQuery("SELECT 1 FROM admins WHERE lid = $1 LIMIT 1", [lid]);
   
-  if (existing.length > 0) return false;
+  if (res.rows.length > 0) return false;
 
-  await db("INSERT INTO admins (lid, name) VALUES ($1, $2)", [lid, name || "Unknown"]);
+  await safeQuery("INSERT INTO admins (lid, name) VALUES ($1, $2)", [lid, name || "Unknown"]);
   return true;
 }
 
 export async function isAdminLid(lid: string): Promise<boolean> {
-  const db = getDb();
-  const existing = await db("SELECT 1 FROM admins WHERE lid = $1 LIMIT 1", [lid]);
-  return existing.length > 0;
+  const res = await safeQuery("SELECT 1 FROM admins WHERE lid = $1 LIMIT 1", [lid]);
+  return res.rows.length > 0;
 }

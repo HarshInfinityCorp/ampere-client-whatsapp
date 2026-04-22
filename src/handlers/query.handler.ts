@@ -6,8 +6,7 @@ import { getChatHistory, addMessageToHistory, ChatMessage } from "../utils/memor
 
 export async function handleQuery(question: string, adminPhone: string = "unknown"): Promise<string> {
   const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayStr = today.toISOString().split("T")[0];
+  const todayStr = today.toDateString(); // e.g. "Wed Apr 22 2026"
 
   // Fetch recent conversational memory for this admin
   const history = getChatHistory(adminPhone);
@@ -16,7 +15,7 @@ export async function handleQuery(question: string, adminPhone: string = "unknow
   const intent = await extractIntentLLM(question, history);
   console.log(`[Query] Intent extracted:`, JSON.stringify(intent));
 
-  // Step 2: Query Firestore with extracted filters
+  // Step 2: Query Neon DB with extracted filters
   let tickets: Ticket[] = [];
   let stats = { available: 0, wanted: 0, total: 0, topEvents: [] as { event: string; count: number }[] };
 
@@ -75,10 +74,10 @@ export async function handleQuery(question: string, adminPhone: string = "unknow
     }
 
   } catch (e: any) {
-    console.error("[Query Handler] Firestore query failed:", e.message);
+    console.error("[Query Handler] Neon DB query failed:", e.message);
   }
 
-  console.log(`[Query] Firestore returned ${tickets.length} tickets`);
+  console.log(`[Query] Neon DB returned ${tickets.length} tickets`);
 
   const totalCount = tickets.length;
   const ticketsContext = buildTicketContext(tickets, totalCount);
@@ -95,9 +94,10 @@ ${ticketsContext}
 
 IMPORTANT — DATA TRUST RULES:
 - The MATCHING TICKETS section above contains ALL the data you need. This is the COMPLETE result set from the database query. There is nothing hidden or missing.
-- If it says "${totalCount} found", then you have exactly ${totalCount} tickets to work with. List them ALL when the user asks for details.
+- If it says "\${totalCount} found", then you have exactly \${totalCount} tickets to work with. List them ALL when the user asks for details.
 - The conversation history (previous messages) is ONLY for understanding what topic the user is referring to. Do NOT use old conversation messages as ticket data. ONLY use the MATCHING TICKETS above.
 - CRITICAL: DO NOT hallucinate or invent tickets! If the context says "No matching tickets found", you must clearly state "No tickets found". Do NOT list fake tickets.
+- If a user asks for the timestamp or posting time, it is explicitly listed as "posted:" at the end of each ticket.
 
 FORMATTING RULES:
 - Answer questions naturally and concisely in WhatsApp-friendly format
@@ -106,7 +106,8 @@ FORMATTING RULES:
 - When showing results, mention the total count found
 - Max 15 lines
 - Do NOT use markdown headers, code blocks, or asterisks for bold
-- Just answer the question directly`;
+- If the user's query is highly ambiguous or you lack sufficient context to answer it precisely (e.g. asking "how many" without specifying what), YOU MUST politely ask a clarifying question to get more details.
+- Just answer the question directly unless a clarifying question is absolutely necessary.`;
 
   try {
     const client = getAIClient();
@@ -123,6 +124,9 @@ FORMATTING RULES:
 
     const answer = response.choices[0]?.message?.content?.trim();
     if (!answer) throw new Error("Empty AI response");
+    if (answer.startsWith("Codex error:") || answer.includes('{"type":"error"')) {
+      throw new Error("OpenClaw proxy backend error intercepted");
+    }
 
     // Persist to memory!
     addMessageToHistory(adminPhone, "user", question);

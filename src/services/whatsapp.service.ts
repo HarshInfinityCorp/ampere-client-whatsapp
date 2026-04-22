@@ -138,7 +138,7 @@ export async function startWhatsApp(onMessageHandler: (msg: proto.IWebMessageInf
     if (type !== "notify") return;
     for (const msg of messages) {
       await onMessageHandler(msg).catch((e) =>
-        console.error("[WA] Message handler error:", e.message)
+        console.error("[WA] Message handler error:", e)
       );
     }
   });
